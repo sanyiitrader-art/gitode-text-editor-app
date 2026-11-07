@@ -1,9 +1,10 @@
 package com.gitode.ui
 
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,14 +13,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -27,19 +32,29 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -82,7 +97,6 @@ private fun startValue(edit: InlineEdit?): TextFieldValue = when (edit) {
     else -> TextFieldValue("")
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ExplorerDrawer(
     vm: MainViewModel,
@@ -92,7 +106,7 @@ fun ExplorerDrawer(
 ) {
     val c = G.c
     val scope = rememberCoroutineScope()
-    val keyboard = LocalSoftwareKeyboardController.current
+    val view = LocalView.current
     val root = vm.root
     val edit = vm.inlineEdit
 
@@ -100,18 +114,30 @@ fun ExplorerDrawer(
     var error by remember(edit) { mutableStateOf<String?>(null) }
     var trigger by remember(edit) { mutableIntStateOf(0) }
     var createMenu by remember { mutableStateOf(false) }
-    var itemMenu by remember { mutableStateOf<File?>(null) }
     var confirm by remember { mutableStateOf<File?>(null) }
     var confirmBulk by remember { mutableStateOf(false) }
 
+    // Any tap on empty space: clear the highlight, cancel create/rename, leave selection mode, hide the keyboard.
+    val onBlank: () -> Unit = {
+        vm.tapBlank()
+        hideKeyboard(view)
+    }
+
     fun submit() {
         scope.launch {
-            val err = vm.commitInline(field.text)
+            val result = vm.commitInline(field.text)
+            val err = result.error
             if (err != null) {
                 error = err
                 trigger++
             } else {
-                keyboard?.hide()
+                hideKeyboard(view)
+                val created = result.openFile
+                if (created != null) {
+                    // A new file opens straight away and the drawer closes.
+                    vm.openFile(created)
+                    onClose()
+                }
             }
         }
     }
@@ -127,11 +153,11 @@ fun ExplorerDrawer(
     }
 
     Column(
-        Modifier.fillMaxSize().background(c.surface).statusBarsPadding().imePadding(),
+        Modifier.fillMaxSize().background(c.surface).statusBarsPadding().navigationBarsPadding().imePadding(),
     ) {
-        // ---- drawer top bar
+        // ---- drawer top bar (empty space in it counts as a blank tap)
         Row(
-            Modifier.fillMaxWidth().height(64.dp).padding(start = 20.dp, end = 8.dp),
+            Modifier.fillMaxWidth().height(64.dp).noRippleClick(onBlank).padding(start = 20.dp, end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Txt(
@@ -140,27 +166,44 @@ fun ExplorerDrawer(
             )
             when {
                 edit != null -> {
-                    TextAction("Cancel", { vm.cancelInline() })
+                    TextAction("Cancel", { vm.cancelInline(); hideKeyboard(view) })
                     TextAction("Save", { submit() }, color = c.accent, bold = true)
                 }
                 vm.selectionMode -> TextAction(
                     "Delete ${vm.selected.size}", { confirmBulk = true },
                     color = c.error, enabled = vm.selected.isNotEmpty(), bold = true,
                 )
-                else -> TextAction("Create", { createMenu = true }, color = c.accent, enabled = root != null, bold = true)
+                else -> Box {
+                    TextAction("Create", { createMenu = true }, color = c.accent, enabled = root != null, bold = true)
+                    DropdownMenu(
+                        expanded = createMenu,
+                        onDismissRequest = { createMenu = false },
+                        modifier = Modifier.background(c.card, RoundedCornerShape(12.dp)),
+                    ) {
+                        DropdownMenuItem(
+                            text = { Txt("File") },
+                            onClick = { createMenu = false; vm.startCreate(false) },
+                        )
+                        DropdownMenuItem(
+                            text = { Txt("Folder") },
+                            onClick = { createMenu = false; vm.startCreate(true) },
+                        )
+                    }
+                }
             }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.outline))
 
         // ---- explorer listing
         if (root == null) {
-            Box(Modifier.weight(1f).fillMaxWidth().noRippleClick { vm.tapBlank() }, contentAlignment = Alignment.Center) {
-                Txt("No folder open", color = c.dim)
-            }
+            Box(
+                Modifier.weight(1f).fillMaxWidth().noRippleClick(onBlank),
+                contentAlignment = Alignment.Center,
+            ) { Txt("No folder open", color = c.dim) }
         } else {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.weight(1f).fillMaxWidth().noRippleClick { vm.tapBlank() },
+                modifier = Modifier.weight(1f).fillMaxWidth().noRippleClick(onBlank),
             ) {
                 items(
                     rows,
@@ -188,6 +231,7 @@ fun ExplorerDrawer(
                                     depth = r.depth,
                                     isExpanded = vm.expanded.contains(f.path),
                                     lit = lit,
+                                    menuEnabled = !vm.selectionMode && edit == null,
                                     onClick = {
                                         if (f.isDirectory) {
                                             vm.tapFolder(f)
@@ -196,7 +240,9 @@ fun ExplorerDrawer(
                                             if (!vm.selectionMode) onClose()
                                         }
                                     },
-                                    onLongClick = { if (!vm.selectionMode && edit == null) itemMenu = f },
+                                    onRename = { vm.startRename(f) },
+                                    onSelect = if (f.isDirectory) null else ({ vm.enterSelection(f) }),
+                                    onDelete = { confirm = f },
                                 )
                             }
                         }
@@ -205,36 +251,18 @@ fun ExplorerDrawer(
             }
         }
 
-        // ---- fixed bottom bar: Actions and Settings
+        // ---- fixed bottom area: Actions and Settings, stacked, above the system navigation bar
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.outline))
-        Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Row(
-                Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).clickable(onClick = onActions)
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Ico(Ic.Hammer, c.accent, 24.dp)
-                Spacer(Modifier.width(14.dp))
-                Txt("Actions", size = 16.sp, weight = FontWeight.SemiBold)
-            }
-            IconBtn(Ic.Settings, onSettings)
+        Column(
+            Modifier.fillMaxWidth().noRippleClick(onBlank).padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            DrawerButton(Ic.Hammer, "Actions", onActions)
+            DrawerButton(Ic.Settings, "Settings", onSettings)
         }
     }
 
-    // ---- menus and dialogs
-    if (createMenu) {
-        ActionMenuDialog(
-            options = listOf("File" to { vm.startCreate(false) }, "Folder" to { vm.startCreate(true) }),
-            onDismiss = { createMenu = false },
-        )
-    }
-    itemMenu?.let { f ->
-        val options = ArrayList<Pair<String, () -> Unit>>()
-        options.add("Rename" to { vm.startRename(f) })
-        if (!f.isDirectory) options.add("Select" to { vm.enterSelection(f) })
-        options.add("Delete" to { confirm = f })
-        ActionMenuDialog(options = options, onDismiss = { itemMenu = null })
-    }
+    // ---- dialogs
     confirm?.let { f ->
         ConfirmDialog(
             title = "Are you sure?",
@@ -265,37 +293,116 @@ fun ExplorerDrawer(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun DrawerButton(ic: Ic, label: String, onClick: () -> Unit) {
+    val c = G.c
+    val shape = RoundedCornerShape(14.dp)
+    Row(
+        Modifier.fillMaxWidth().height(56.dp).clip(shape).background(c.card)
+            .border(1.dp, c.outline, shape).clickable(onClick = onClick).padding(horizontal = 18.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Ico(ic, c.accent, 26.dp)
+        Spacer(Modifier.width(16.dp))
+        Txt(label, size = 17.sp, weight = FontWeight.SemiBold)
+    }
+}
+
+/** Places the long-press menu just above where the finger pressed (below the row if there's no room above). */
+private class AboveProvider(private val pressX: Int, private val gap: Int) : PopupPositionProvider {
+    override fun calculatePosition(
+        anchorBounds: IntRect,
+        windowSize: IntSize,
+        layoutDirection: LayoutDirection,
+        popupContentSize: IntSize,
+    ): IntOffset {
+        val maxX = (windowSize.width - popupContentSize.width - 8).coerceAtLeast(8)
+        val x = (anchorBounds.left + pressX - popupContentSize.width / 2).coerceIn(8, maxX)
+        var y = anchorBounds.top - popupContentSize.height - gap
+        if (y < 8) y = anchorBounds.bottom + gap
+        return IntOffset(x, y)
+    }
+}
+
+@Composable
+private fun ContextMenu(items: List<Pair<String, () -> Unit>>, onDismiss: () -> Unit) {
+    val c = G.c
+    val shape = RoundedCornerShape(12.dp)
+    Column(Modifier.clip(shape).background(c.card).border(1.dp, c.outline, shape).padding(vertical = 4.dp)) {
+        for ((label, action) in items) {
+            Box(
+                Modifier.widthIn(min = 124.dp).clickable { onDismiss(); action() }
+                    .padding(horizontal = 18.dp, vertical = 11.dp),
+            ) {
+                Txt(label, color = if (label == "Delete") c.error else c.text, size = 14.sp)
+            }
+        }
+    }
+}
+
 @Composable
 private fun ItemRow(
     file: File,
     depth: Int,
     isExpanded: Boolean,
     lit: Boolean,
+    menuEnabled: Boolean,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
+    onRename: () -> Unit,
+    onSelect: (() -> Unit)?,
+    onDelete: () -> Unit,
 ) {
     val c = G.c
-    Row(
-        Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 6.dp, vertical = 2.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (lit) c.accent.copy(alpha = 0.20f) else Color.Transparent)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(start = (4 + depth * 18).dp, end = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    val shape = RoundedCornerShape(12.dp)
+    val gap = with(LocalDensity.current) { 6.dp.roundToPx() }
+    var pressX by remember(file.path) { mutableStateOf<Float?>(null) }
+    val clickNow by rememberUpdatedState(onClick)
+    val menuOk by rememberUpdatedState(menuEnabled)
+
+    Box(
+        Modifier.fillMaxWidth().padding(start = (8 + depth * 14).dp, end = 8.dp, top = 3.dp, bottom = 3.dp),
     ) {
-        if (file.isDirectory) {
-            Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
-                Ico(Ic.Chevron, c.dim, 18.dp, Modifier.rotate(if (isExpanded) 90f else 0f))
+        Row(
+            Modifier.fillMaxWidth().height(46.dp).clip(shape)
+                .background(if (lit) c.accent.copy(alpha = 0.20f) else Color.Transparent)
+                .border(1.dp, if (lit) c.accent.copy(alpha = 0.75f) else c.outline, shape)
+                .pointerInput(file.path) {
+                    detectTapGestures(
+                        onTap = { clickNow() },
+                        onLongPress = { offset -> if (menuOk) pressX = offset.x },
+                    )
+                }
+                .padding(horizontal = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (file.isDirectory) {
+                Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
+                    Ico(Ic.Chevron, c.dim, 18.dp, Modifier.rotate(if (isExpanded) 90f else 0f))
+                }
+                Spacer(Modifier.width(6.dp))
+                FolderIcon(file.name)
+            } else {
+                Spacer(Modifier.width(28.dp))
+                FileIcon(file.name)
             }
-            Spacer(Modifier.width(8.dp))
-            FolderIcon(file.name)
-        } else {
-            Spacer(Modifier.width(32.dp))
-            FileIcon(file.name)
+            Spacer(Modifier.width(12.dp))
+            Txt(file.name, Modifier.weight(1f), size = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Spacer(Modifier.width(12.dp))
-        Txt(file.name, Modifier.weight(1f), size = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+
+        val px = pressX
+        if (px != null) {
+            val items = ArrayList<Pair<String, () -> Unit>>()
+            items.add("Rename" to onRename)
+            if (onSelect != null) items.add("Select" to onSelect)
+            items.add("Delete" to onDelete)
+            Popup(
+                popupPositionProvider = remember(px) { AboveProvider(px.toInt(), gap) },
+                onDismissRequest = { pressX = null },
+                properties = PopupProperties(focusable = true),
+            ) {
+                ContextMenu(items) { pressX = null }
+            }
+        }
     }
 }
 
@@ -311,30 +418,16 @@ private fun InlineRow(
 ) {
     val c = G.c
     Row(
-        Modifier.fillMaxWidth().padding(start = (10 + depth * 18).dp, end = 10.dp, top = 2.dp, bottom = 2.dp),
+        // the empty click keeps taps in and around the input from counting as blank taps
+        Modifier.fillMaxWidth().noRippleClick { }
+            .padding(start = (14 + depth * 14).dp, end = 10.dp, top = 3.dp, bottom = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Spacer(Modifier.width(if (isDir) 4.dp else 0.dp))
         Ico(if (isDir) Ic.Folder else Ic.File, c.dim, 22.dp)
         Spacer(Modifier.width(10.dp))
         GitodeInput(
             value = field, onValueChange = onField, modifier = Modifier.weight(1f),
-            error = error, errorTrigger = trigger, autoFocus = true, onDone = onDone, minHeight = 48.dp,
+            error = error, errorTrigger = trigger, autoFocus = true, onDone = onDone, minHeight = 46.dp,
         )
-    }
-}
-
-@Composable
-private fun ActionMenuDialog(options: List<Pair<String, () -> Unit>>, onDismiss: () -> Unit) {
-    val c = G.c
-    DialogShell(onDismiss) {
-        for ((label, action) in options) {
-            Box(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                    .clickable { onDismiss(); action() }.padding(horizontal = 12.dp, vertical = 15.dp),
-            ) {
-                Txt(label, color = if (label == "Delete") c.error else c.text, size = 16.sp)
-            }
-        }
     }
 }
