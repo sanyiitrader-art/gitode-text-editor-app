@@ -57,14 +57,10 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.asFrameworkPaint
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
@@ -131,17 +127,24 @@ fun vibrate(context: Context, ms: Long) {
     }
 }
 
-/** Soft accent glow behind a component. */
+/**
+ * Soft accent glow behind a component, drawn as stacked translucent rounded shapes
+ * (larger and fainter towards the outside), so it needs no blur or special graphics API.
+ */
 fun Modifier.glow(color: Color, radius: Dp = 18.dp, corner: Dp = 14.dp, alpha: Float = 0.55f): Modifier =
     this.drawBehind {
-        drawIntoCanvas { canvas ->
-            val paint = Paint()
-            paint.asFrameworkPaint().apply {
-                isAntiAlias = true
-                this.color = android.graphics.Color.TRANSPARENT
-                setShadowLayer(radius.toPx(), 0f, 0f, color.copy(alpha = alpha).toArgb())
-            }
-            canvas.drawRoundRect(0f, 0f, size.width, size.height, corner.toPx(), corner.toPx(), paint)
+        val steps = 8
+        val reach = radius.toPx()
+        val base = corner.toPx()
+        val layerAlpha = (alpha / steps) * 0.9f
+        for (i in steps downTo 1) {
+            val grow = reach * i / steps
+            drawRoundRect(
+                color = color.copy(alpha = layerAlpha),
+                topLeft = Offset(-grow, -grow),
+                size = Size(size.width + grow * 2f, size.height + grow * 2f),
+                cornerRadius = CornerRadius(base + grow),
+            )
         }
     }
 
