@@ -76,10 +76,10 @@ object Fs {
         "ini" to "Config", "sql" to "SQL", "csharp" to "C#", "go" to "Go", "dart" to "Dart",
     )
 
-    /** Languages that have a logo bundled by tools/prepare.py. */
+    /** Languages that have a logo bundled by tools/prepare.py (the key is also the logo's file name). */
     private val LOGO_KEYS = setOf(
         "python", "kotlin", "typescript", "javascript", "cpp", "swift", "java", "ruby", "php",
-        "rust", "toml", "gdscript", "tsx",
+        "rust", "toml", "gdscript", "tsx", "yaml", "xml", "qmake", "gitignore",
     )
 
     fun ext(name: String): String = name.substringAfterLast('.', "").lowercase()
@@ -90,6 +90,8 @@ object Fs {
     /** Key of the bundled logo for a file name, or null if it has none. */
     fun iconKeyOf(name: String): String? {
         val lang = languageOf(name) ?: return null
+        // .dockerignore and .npmignore share the ignore-file highlighting but not Git's logo.
+        if (lang == "gitignore" && ext(name) != "gitignore") return null
         val key = if (lang == "c") "cpp" else lang
         return if (key in LOGO_KEYS) key else null
     }
