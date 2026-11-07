@@ -249,9 +249,8 @@ class GitodeEditor(context: Context) : CodeEditor(context) {
 
     private fun handleTyped(ch: Char, hasSelection: Boolean): Boolean {
         val cfg = smartProvider() ?: return false
-        if (cfg.tabWidth < 0) return false
         val c = ctx()
-        val r = SmartEdit.typed(ch, c.before, c.after, hasSelection)
+        val r = SmartEdit.typed(ch, c.before, c.after, hasSelection, cfg.lang)
         return when {
             r is SmartResult.Wrap -> { wrapSelection(r.open, r.close); true }
             r === SmartResult.Skip -> { setSelection(c.line, c.col + 1); true }
