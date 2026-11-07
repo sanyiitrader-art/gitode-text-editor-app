@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,7 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
@@ -39,13 +40,15 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun SearchScreen(vm: MainViewModel, onClose: () -> Unit, onPick: (SearchHit) -> Unit) {
     val c = G.c
-    val keyboard = LocalSoftwareKeyboardController.current
+    val view = LocalView.current
     var value by remember { mutableStateOf(TextFieldValue(vm.searchQuery, TextRange(vm.searchQuery.length))) }
     BackHandler { onClose() }
 
-    Column(Modifier.screenBase().imePadding()) {
+    // A tap on empty space hides the keyboard.
+    Column(Modifier.screenBase().imePadding().noRippleClick { hideKeyboard(view) }) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+            // the empty click keeps taps next to the input from counting as blank taps
+            Modifier.fillMaxWidth().noRippleClick { }.padding(horizontal = 8.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconBtn(Ic.Close, onClose)
@@ -56,7 +59,7 @@ fun SearchScreen(vm: MainViewModel, onClose: () -> Unit, onPick: (SearchHit) -> 
                 placeholder = "Search in file",
                 autoFocus = vm.searchQuery.isEmpty(),
                 imeAction = ImeAction.Search,
-                onDone = { keyboard?.hide() },
+                onDone = { hideKeyboard(view) },
             )
         }
         when {
@@ -68,7 +71,7 @@ fun SearchScreen(vm: MainViewModel, onClose: () -> Unit, onPick: (SearchHit) -> 
             }
             else -> LazyColumn(
                 Modifier.fillMaxSize().padding(horizontal = 16.dp),
-                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 item { Spacer(Modifier.height(4.dp)) }
                 itemsIndexed(vm.searchHits) { _, hit -> ResultCard(hit) { onPick(hit) } }
@@ -96,11 +99,12 @@ private fun ResultCard(hit: SearchHit, onClick: () -> Unit) {
     Column(
         Modifier.fillMaxWidth().clip(shape).background(c.card).border(1.dp, c.outline, shape).clickable(onClick = onClick),
     ) {
+        // thin header: only as tall as its text needs
         Box(
             Modifier.fillMaxWidth().background(c.accent.copy(alpha = 0.16f))
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(horizontal = 16.dp, vertical = 3.dp),
         ) {
-            Txt("Line ${hit.line + 1}", color = c.accent, size = 13.sp, weight = FontWeight.SemiBold)
+            Txt("Line ${hit.line + 1}", color = c.accent, size = 12.sp, weight = FontWeight.SemiBold)
         }
         Text(
             text = styled,
