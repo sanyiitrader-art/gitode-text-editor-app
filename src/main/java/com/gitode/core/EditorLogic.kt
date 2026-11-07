@@ -60,6 +60,10 @@ class LangRules(
     val rustQuotes: Boolean = false,
     /** ' is also the transpose operator (MATLAB, Julia), so it is not paired after ) ] } . or '. */
     val transposeQuote: Boolean = false,
+    /** Markdown lists: Enter continues "- ", "* ", "1. " and "- [ ] " items; Enter on an empty item leaves the list. */
+    val markdownLists: Boolean = false,
+    /** False where ' is not a string quote (Haskell identifiers, Lisp quote), so it is never auto-paired. */
+    val singleQuotePairs: Boolean = true,
 )
 
 object Langs {
@@ -91,6 +95,13 @@ object Langs {
     /** "target: dependencies" lines start a recipe, which is indented with a tab. */
     private val MAKE_OPENER = Regex("""^[^\s#][^#=]*:(?!=).*$""")
 
+    private val HASKELL_OPENER = Regex("""^.*(?:\bwhere|\bdo|\bof|\blet|\bthen|\belse|=|->)$""")
+    private val ELIXIR_OPENER = Regex("""^.*(?:\bdo|->)$""")
+    private val ERLANG_OPENER = Regex("""^.*(?:->|\bof|\bbegin|\bafter|\breceive|\btry)$""")
+    private val NIX_OPENER = Regex("""^.*\blet$""")
+
+    private val VUE_LIKE = LangRules(listOf("//"), blockComments = true, xmlComments = true, angle = true)
+
     private val table: Map<String, LangRules> = mapOf(
         // original languages
         "python" to LangRules(listOf("#"), colonOpens = true),
@@ -111,7 +122,6 @@ object Langs {
         "xml" to MARKUP,
         "qmake" to LangRules(listOf("#"), continuation = true),
         "gitignore" to LangRules(listOf("#"), pairs = false),
-        // more languages
         "csharp" to C_LIKE_ANGLE,
         "go" to C_LIKE,
         "dart" to C_LIKE_ANGLE,
@@ -129,8 +139,22 @@ object Langs {
         "julia" to LangRules(listOf("#"), opener = JULIA_OPENER, transposeQuote = true),
         "matlab" to LangRules(listOf("%"), opener = MATLAB_OPENER, transposeQuote = true),
         "scala" to C_LIKE,
-        // extras
         "groovy" to C_LIKE,
+        // newest additions
+        "markdown" to LangRules(emptyList(), xmlComments = true, markdownLists = true),
+        "text" to LangRules(emptyList(), pairs = false), // plain text: nothing is paired
+        "graphql" to LangRules(listOf("#")),
+        "haskell" to LangRules(listOf("--"), opener = HASKELL_OPENER, singleQuotePairs = false),
+        "elixir" to LangRules(listOf("#"), opener = ELIXIR_OPENER),
+        "erlang" to LangRules(listOf("%"), opener = ERLANG_OPENER),
+        "perl" to LangRules(listOf("#")),
+        "asm" to LangRules(listOf(";", "#", "//"), blockComments = true),
+        "zig" to C_LIKE,
+        "nix" to LangRules(listOf("#"), blockComments = true, opener = NIX_OPENER),
+        "terraform" to LangRules(listOf("#", "//"), blockComments = true),
+        "vue" to VUE_LIKE,
+        "svelte" to VUE_LIKE,
+        "clojure" to LangRules(listOf(";"), singleQuotePairs = false),
     )
 
     fun of(lang: String?): LangRules = lang?.let { table[it] } ?: DEFAULT
@@ -144,6 +168,9 @@ object SmartEdit {
     private val CLOSERS = setOf(')', ']', '}', '>')
     private val QUOTES = setOf('\'', '"', '`')
     private const val PAIR_BEFORE = ")]};,.:>"
+
+    /** A Markdown list line: indent, marker ("-", "*", "+", "1." or "1)"), optional task box, text. */
+    private val MD_LIST = Regex("""^(\s*)([-*+]|\d{1,9}[.)])[ \t]+(\[[ xX]\][ \t]+)?(.*)$""")
 
     private fun inComment(before: String, r: LangRules): Boolean {
         for (marker in r.lineComments) {
@@ -174,6 +201,9 @@ object SmartEdit {
         if (hasSelection) {
             return if (close != null) SmartResult.Wrap(ch.toString(), close.toString()) else SmartResult.None
         }
+        // Where ' is not a string quote it is never paired.
+        if (ch == '\'' && !rules.singleQuotePairs) return SmartResult.None
+
         val prev = before.lastOrNull()
         val next = after.firstOrNull()
 
@@ -216,6 +246,27 @@ object SmartEdit {
 
     fun enter(before: String, after: String, cfg: SmartConfig): SmartResult {
         val rules = Langs.of(cfg.lang)
+
+        // Markdown: continue the list item you are in (an empty item ends the list).
+        if (rules.markdownLists) {
+            val m = MD_LIST.matchEntire(before)
+            if (m != null) {
+                val listIndent = m.groupValues[1]
+                val marker = m.groupValues[2]
+                val task = m.groupValues[3]
+                val content = m.groupValues[4]
+                if (content.isBlank()) return SmartResult.Edit("", deleteBefore = before.length)
+                val next = if (marker.first().isDigit()) {
+                    val n = marker.dropLast(1).toIntOrNull() ?: 1
+                    "${n + 1}${marker.last()}"
+                } else {
+                    marker
+                }
+                val box = if (task.isNotEmpty()) "[ ] " else ""
+                return SmartResult.Edit("\n$listIndent$next $box")
+            }
+        }
+
         val indent = before.takeWhile { it == ' ' || it == '\t' }
         val trimmed = before.trimEnd()
         val last = trimmed.lastOrNull()
