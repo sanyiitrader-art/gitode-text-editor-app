@@ -43,6 +43,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateSetOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -72,6 +73,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.gitode.core.Fs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -105,6 +107,8 @@ fun EditorScreen(
     var showGoto by remember { mutableStateOf(false) }
     var showRepo by remember { mutableStateOf(false) }
     var editor by remember { mutableStateOf<GitodeEditor?>(null) }
+    // Markdown files currently shown as a preview (the switch in the file-name sheet is "on").
+    val previewPaths = remember { mutableStateSetOf<String>() }
 
     fun closeKeyboard() {
         editor?.dismissKeyboard()
@@ -127,6 +131,8 @@ fun EditorScreen(
     val active = vm.active
     val image = vm.imageFile
     val connected = vm.settings.githubConnected
+    val isMd = active != null && Fs.isMarkdown(active.file.name)
+    val previewing = active != null && isMd && previewPaths.contains(active.file.path)
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.screenBase().imePadding()) {
@@ -146,6 +152,7 @@ fun EditorScreen(
                         expanded = menuOpen,
                         onDismiss = { menuOpen = false },
                         hasFile = active != null,
+                        canEdit = active != null && !previewing,
                         autosave = vm.settings.autosave,
                         onAutosave = { vm.settings.autosave = it },
                         onSave = { scope.launch { if (vm.saveCurrent()) vm.toast("Saved") } },
@@ -161,7 +168,8 @@ fun EditorScreen(
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(c.outline))
 
-            // ---- thin file-name sheet: just the name (and the unsaved dot), no box around it
+            // ---- thin file-name sheet: just the name (and the unsaved dot), no box around it.
+            // Markdown files also get the preview switch at the right end.
             val sheetName = active?.file?.name ?: image?.name
             if (sheetName != null) {
                 Row(
@@ -177,6 +185,21 @@ fun EditorScreen(
                         Spacer(Modifier.width(8.dp))
                         Box(Modifier.size(7.dp).clip(CircleShape).background(c.accent))
                     }
+                    Spacer(Modifier.weight(1f))
+                    if (isMd && active != null) {
+                        MiniSwitch(
+                            checked = previewing,
+                            onChange = { on ->
+                                if (on) {
+                                    vm.flushActive() // the preview shows what is on screen right now
+                                    closeKeyboard()
+                                    previewPaths.add(active.file.path)
+                                } else {
+                                    previewPaths.remove(active.file.path)
+                                }
+                            },
+                        )
+                    }
                 }
                 Box(Modifier.fillMaxWidth().height(1.dp).background(c.outline))
             }
@@ -184,6 +207,9 @@ fun EditorScreen(
             // ---- main surface
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
+                    active != null && previewing -> MarkdownPreview(
+                        text = active.text, baseDir = active.file.parentFile, modifier = Modifier.fillMaxSize(),
+                    )
                     active != null -> CodeEditorView(
                         vm = vm, buffer = active, onEditor = { editor = it }, modifier = Modifier.fillMaxSize(),
                     )
@@ -193,7 +219,7 @@ fun EditorScreen(
                 }
             }
 
-            if (active != null) SmartKeysBar(editor)
+            if (active != null && !previewing) SmartKeysBar(editor)
         }
 
         // ---- duplicate-content reminder: a layer at the very top of the screen (never blocks anything)
@@ -232,8 +258,7 @@ fun EditorScreen(
             }
 
             // Left-edge strip. It is ALWAYS composed, so a drag that starts on it keeps going while
-            // the drawer appears (the old version removed it mid-drag, which cancelled the gesture).
-            // It also asks Android not to treat swipes here as the system Back gesture.
+            // the drawer appears. It also asks Android not to treat swipes here as the system Back gesture.
             Box(
                 Modifier.align(Alignment.TopStart).statusBarsPadding().padding(top = 100.dp)
                     .height(320.dp).width(28.dp)
@@ -342,6 +367,7 @@ private fun EditorMenu(
     expanded: Boolean,
     onDismiss: () -> Unit,
     hasFile: Boolean,
+    canEdit: Boolean,
     autosave: Boolean,
     onAutosave: (Boolean) -> Unit,
     onSave: () -> Unit,
@@ -371,9 +397,10 @@ private fun EditorMenu(
         MenuRow("Open folder") { onDismiss(); onOpenFolder() }
         Box(Modifier.fillMaxWidth().padding(vertical = 6.dp).height(1.dp).background(c.outline))
         MenuHeader("Editor")
-        MenuRow("Search text in file", hasFile) { onDismiss(); onSearch() }
-        MenuRow("Replace", hasFile) { onDismiss(); onReplace() }
-        MenuRow("Go to line", hasFile) { onDismiss(); onGoto() }
+        // these work on the editor, so they are off while a Markdown preview is showing
+        MenuRow("Search text in file", canEdit) { onDismiss(); onSearch() }
+        MenuRow("Replace", canEdit) { onDismiss(); onReplace() }
+        MenuRow("Go to line", canEdit) { onDismiss(); onGoto() }
         MenuRow("Repo name") { onDismiss(); onRepo() }
     }
 }
