@@ -6,7 +6,7 @@
    plus three small self-contained grammars written here: XML, Qt project files
    (qmake) and .gitignore.
 3. Fonts (google/fonts repository).
-4. Language logos (devicon / simple-icons rasterised to PNG, plus a drawn XML logo).
+4. Language logos (devicon / simple-icons rasterised to PNG, plus a few drawn here).
 5. Theme preview screenshots copied from theme-previews/.
 
 Everything generated lives in src/main/assets and src/main/res/mipmap-*,
@@ -115,7 +115,8 @@ def make_icons():
 GRAMMAR_URL = "https://cdn.jsdelivr.net/npm/tm-grammars@1/grammars/{}.json"
 THEME_URL = "https://cdn.jsdelivr.net/npm/tm-themes@1/themes/{}.json"
 
-# "xml" is NOT listed here: it is a self-contained grammar written below, because
+# Keys here are Gitode's language keys (they match Fs.languageOf in the app).
+# "xml" is NOT listed: it is a self-contained grammar written below, because
 # Ruby and PHP depend on it and the downloaded one did not load reliably.
 LANGS = [
     "python", "kotlin", "typescript", "tsx", "javascript", "toml", "gdscript",
@@ -123,7 +124,15 @@ LANGS = [
     "json", "jsonc", "markdown", "yaml", "html", "css",
     "shellscript", "groovy", "ini", "sql", "csharp", "go", "dart",
     "lua", "xsl",
+    "powershell", "dockerfile", "makefile", "r", "julia", "matlab", "scala",
 ]
+
+# Some grammars are published under a different name; each is tried in order.
+SOURCE_NAMES = {
+    "dockerfile": ["docker", "dockerfile"],
+    "makefile": ["make", "makefile"],
+}
+
 REQUIRED_LANGS = {
     "python", "kotlin", "typescript", "tsx", "javascript", "toml", "gdscript",
     "cpp", "swift", "java", "ruby", "php", "rust", "yaml",
@@ -344,6 +353,18 @@ def write_grammar(tm, name, data, scope):
     }
 
 
+def download_grammar(lang):
+    """Download the grammar for a Gitode language key, trying alternative published names."""
+    last = None
+    for source in SOURCE_NAMES.get(lang, [lang]):
+        try:
+            grammar = json.loads(http_get(GRAMMAR_URL.format(source)))
+            return grammar, grammar["scopeName"]
+        except Exception as e:  # noqa: BLE001
+            last = e
+    raise RuntimeError(last)
+
+
 def fetch_textmate():
     tm = ASSETS / "textmate"
     shutil.rmtree(tm, ignore_errors=True)
@@ -352,12 +373,9 @@ def fetch_textmate():
     downloaded = {}
     for lang in LANGS:
         try:
-            grammar = json.loads(http_get(GRAMMAR_URL.format(lang)))
-            scope = grammar["scopeName"]
+            downloaded[lang] = download_grammar(lang)
         except Exception as e:  # noqa: BLE001
             (fail if lang in REQUIRED_LANGS else warn)(f"grammar {lang}: {e}")
-            continue
-        downloaded[lang] = (grammar, scope)
 
     custom = {name: (g, g["scopeName"]) for name, g in CUSTOM_GRAMMARS.items()}
     known = {scope for _, scope in downloaded.values()} | {scope for _, scope in custom.values()}
@@ -469,24 +487,77 @@ LOGOS = {
     "gdscript": ("simple", "godotengine", "#478CBF"),
     "tsx": ("simple", "react", "#61DAFB"),
     "yaml": ("simple", "yaml", "#CB171E"),
-    "qmake": ("simple", "qt", "#41CD52"),      # Qt project files (.pro)
+    "qmake": ("simple", "qt", "#41CD52"),          # Qt project files (.pro)
     "gitignore": ("simple", "git", "#F05032"),
-    "xml": ("local", None, None),              # drawn here: a "</>" mark
+    "xml": ("local", None, None),                  # drawn here: a "</>" mark
+    # ---- more languages
+    "csharp": ("devicon", "csharp", None),
+    "go": ("devicon", "go", None),
+    "dart": ("devicon", "dart", None),
+    "lua": ("devicon", "lua", None),
+    "sql": ("local", None, None),                  # drawn here: a database cylinder
+    "html": ("devicon", "html5", None),
+    "css": ("devicon", "css3", None),
+    "json": ("local", None, None),                 # drawn here: curly braces
+    "shellscript": ("simple", "gnubash", "#4EAA25"),  # Bash
+    "powershell": ("simple", "powershell", "#5391FE"),
+    "dockerfile": ("devicon", "docker", None),
+    "makefile": ("local", None, None),             # drawn here: a cog
+    "r": ("devicon", "r", None),
+    "julia": ("devicon", "julia", None),
+    "matlab": ("devicon", "matlab", None),
+    "scala": ("devicon", "scala", None),
 }
 
-# XML has no suitable brand logo, so its mark is drawn from plain strokes (no fonts needed).
-XML_SVG = (
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#F58220" '
-    'stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">'
-    '<polyline points="8,6 2.5,12 8,18"/><polyline points="16,6 21.5,12 16,18"/>'
-    '<line x1="14" y1="4.5" x2="10" y2="19.5"/></svg>'
+_SVG_HEAD = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{c}" '
+    'stroke-width="{w}" stroke-linecap="round" stroke-linejoin="round">'
 )
+
+# Marks with no suitable brand logo are drawn from plain strokes (no fonts needed).
+LOCAL_SVGS = {
+    "xml": (
+        _SVG_HEAD.format(c="#F58220", w="2.6")
+        + '<polyline points="8,6 2.5,12 8,18"/><polyline points="16,6 21.5,12 16,18"/>'
+        '<line x1="14" y1="4.5" x2="10" y2="19.5"/></svg>'
+    ),
+    "sql": (
+        _SVG_HEAD.format(c="#E38C00", w="2")
+        + '<ellipse cx="12" cy="5.5" rx="7.5" ry="3"/>'
+        '<path d="M4.5 5.5v13c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-13"/>'
+        '<path d="M4.5 12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3"/></svg>'
+    ),
+    "json": (
+        _SVG_HEAD.format(c="#F2C94C", w="2.2")
+        + '<path d="M9 4.5C6.5 4.5 6.5 6.5 6.5 8.5V10c0 1.4-1 2-2.5 2 1.5 0 2.5.6 2.5 2v1.5c0 2 0 4 2.5 4"/>'
+        '<path d="M15 4.5c2.5 0 2.5 2 2.5 4V10c0 1.4 1 2 2.5 2-1.5 0-2.5.6-2.5 2v1.5c0 2 0 4-2.5 4"/></svg>'
+    ),
+    "makefile": (
+        _SVG_HEAD.format(c="#8FA3AD", w="2.2")
+        + '<circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="7.2"/>'
+        '<path d="M12 2.8v2M12 19.2v2M2.8 12h2M19.2 12h2M5.5 5.5l1.4 1.4M17.1 17.1l1.4 1.4'
+        'M5.5 18.5l1.4-1.4M17.1 6.9l1.4-1.4"/></svg>'
+    ),
+}
 
 # If a logo download fails, these still get a simple labelled badge instead of a generic icon.
 BADGES = {
     "yaml": ("YML", "#CB171E"),
     "qmake": ("PRO", "#41CD52"),
     "gitignore": ("GIT", "#F05032"),
+    "csharp": ("C#", "#68217A"),
+    "go": ("GO", "#00ADD8"),
+    "dart": ("DRT", "#0175C2"),
+    "lua": ("LUA", "#2C2D72"),
+    "html": ("HTM", "#E34F26"),
+    "css": ("CSS", "#1572B6"),
+    "shellscript": ("SH", "#4EAA25"),
+    "powershell": ("PS", "#5391FE"),
+    "dockerfile": ("DKR", "#2496ED"),
+    "r": ("R", "#276DC3"),
+    "julia": ("JL", "#9558B2"),
+    "matlab": ("ML", "#E16737"),
+    "scala": ("SCA", "#DC322F"),
 }
 
 
@@ -513,7 +584,7 @@ def fetch_logos():
         svg = None
         try:
             if source == "local":
-                svg = XML_SVG
+                svg = LOCAL_SVGS[key]
             else:
                 url = DEVICON.format(slug) if source == "devicon" else SIMPLE.format(slug)
                 svg = http_get(url).decode("utf-8")
