@@ -7,7 +7,13 @@ import kotlin.math.abs
 // ====================================================================== smart editing
 
 class SmartConfig(val tabWidth: Int, val useSpaces: Boolean, val lang: String?) {
-    val unit: String get() = if (useSpaces) " ".repeat(tabWidth.coerceAtLeast(1)) else "\t"
+    /** One level of indentation. Makefile recipes need a real tab, and Go code is tab-indented (gofmt). */
+    val unit: String
+        get() = when {
+            lang == "makefile" || lang == "go" -> "\t"
+            useSpaces -> " ".repeat(tabWidth.coerceAtLeast(1))
+            else -> "\t"
+        }
 }
 
 /** What the editor should do instead of its default behaviour. */
@@ -52,6 +58,8 @@ class LangRules(
     val opener: Regex? = null,
     /** ' is also used for lifetimes, so it is not paired after < & or a comma. */
     val rustQuotes: Boolean = false,
+    /** ' is also the transpose operator (MATLAB, Julia), so it is not paired after ) ] } . or '. */
+    val transposeQuote: Boolean = false,
 )
 
 object Langs {
@@ -64,7 +72,27 @@ object Langs {
         """^(?!.*\bend\s*$)(?:(?:def|class|module|if|unless|while|until|for|case|begin|else|elsif|ensure|rescue|when)\b.*|.*\bdo(?:\s*\|[^|]*\|)?)$""",
     )
 
+    private val LUA_OPENER = Regex(
+        """^(?!.*\bend\s*[,;)]*$)(?:.*\b(?:then|do)|repeat|else|elseif\b.*|(?:local\s+)?function\b.*|.*\bfunction\s*\(.*)$""",
+    )
+
+    private val JULIA_OPENER = Regex(
+        """^(?!.*\bend\s*$)(?:(?:function|macro|if|elseif|else|for|while|begin|let|struct|mutable\s+struct|abstract\s+type|module|baremodule|try|catch|finally|quote)\b.*|.*\bdo(?:\s+[\w,\s()]*)?)$""",
+    )
+
+    private val MATLAB_OPENER = Regex(
+        """^(?!.*\bend\s*;?\s*$)(?:function|if|elseif|else|for|parfor|while|switch|case|otherwise|try|catch|classdef|methods|properties|events|enumeration)\b.*$""",
+    )
+
+    private val SHELL_OPENER = Regex(
+        """^(?:.*[;\s](?:then|do)|then|do|else|elif\b.*[;\s]then)$""",
+    )
+
+    /** "target: dependencies" lines start a recipe, which is indented with a tab. */
+    private val MAKE_OPENER = Regex("""^[^\s#][^#=]*:(?!=).*$""")
+
     private val table: Map<String, LangRules> = mapOf(
+        // original languages
         "python" to LangRules(listOf("#"), colonOpens = true),
         "gdscript" to LangRules(listOf("#"), colonOpens = true),
         "yaml" to LangRules(listOf("#"), colonOpens = true, listDash = true),
@@ -80,16 +108,29 @@ object Langs {
         "swift" to C_LIKE_ANGLE,
         "rust" to LangRules(listOf("//"), blockComments = true, angle = true, rustQuotes = true),
         "php" to LangRules(listOf("//", "#"), blockComments = true),
-        "csharp" to C_LIKE_ANGLE,
-        "dart" to C_LIKE_ANGLE,
-        "go" to C_LIKE,
-        "groovy" to C_LIKE,
-        "css" to LangRules(emptyList(), blockComments = true),
         "xml" to MARKUP,
-        "html" to MARKUP,
         "qmake" to LangRules(listOf("#"), continuation = true),
-        "shellscript" to LangRules(listOf("#"), continuation = true),
         "gitignore" to LangRules(listOf("#"), pairs = false),
+        // more languages
+        "csharp" to C_LIKE_ANGLE,
+        "go" to C_LIKE,
+        "dart" to C_LIKE_ANGLE,
+        "lua" to LangRules(listOf("--"), opener = LUA_OPENER),
+        "sql" to LangRules(listOf("--"), blockComments = true),
+        "html" to MARKUP,
+        "css" to LangRules(emptyList(), blockComments = true),
+        "json" to LangRules(emptyList()),
+        "jsonc" to C_LIKE,
+        "shellscript" to LangRules(listOf("#"), continuation = true, opener = SHELL_OPENER),
+        "powershell" to LangRules(listOf("#")),
+        "dockerfile" to LangRules(listOf("#"), continuation = true),
+        "makefile" to LangRules(listOf("#"), continuation = true, opener = MAKE_OPENER),
+        "r" to LangRules(listOf("#")),
+        "julia" to LangRules(listOf("#"), opener = JULIA_OPENER, transposeQuote = true),
+        "matlab" to LangRules(listOf("%"), opener = MATLAB_OPENER, transposeQuote = true),
+        "scala" to C_LIKE,
+        // extras
+        "groovy" to C_LIKE,
     )
 
     fun of(lang: String?): LangRules = lang?.let { table[it] } ?: DEFAULT
@@ -153,6 +194,8 @@ object SmartEdit {
                 when {
                     ch == '\'' && prev != null && (prev.isLetterOrDigit() || prev == '_') -> SmartResult.None
                     ch == '\'' && rules.rustQuotes && prev != null && (prev == '<' || prev == '&' || prev == ',') -> SmartResult.None
+                    ch == '\'' && rules.transposeQuote && prev != null &&
+                        (prev == ')' || prev == ']' || prev == '}' || prev == '.' || prev == '\'') -> SmartResult.None
                     before.count { it == ch } % 2 == 1 -> SmartResult.None
                     !canPairBefore(next) -> SmartResult.None
                     else -> SmartResult.Edit(ch.toString() + ch, cursorBack = 1)
