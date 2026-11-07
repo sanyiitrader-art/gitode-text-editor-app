@@ -6,6 +6,7 @@ import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputConnectionWrapper
+import android.view.inputmethod.InputMethodManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -59,8 +60,11 @@ import org.json.JSONObject
 object TextMate {
     private var tried = false
     private var ready = false
+    private var initError: String? = null
     private val themes = HashSet<String>()
     private var scopes: Map<String, String> = emptyMap()
+    private val failures = HashMap<String, String>()
+    private val reported = HashSet<String>()
 
     @Synchronized
     fun init(context: Context) {
@@ -81,6 +85,7 @@ object TextMate {
             ready = true
         } catch (e: Throwable) {
             ready = false
+            initError = (e.message ?: e.javaClass.simpleName).take(140)
         }
     }
 
@@ -107,11 +112,31 @@ object TextMate {
         }
     }
 
+    @Synchronized
     fun languageFor(fileName: String): Language? {
-        if (!ready) return null
         val key = Fs.languageOf(fileName) ?: return null
-        val scope = scopes[key] ?: return null
-        return try { TextMateLanguage.create(scope, false) } catch (e: Throwable) { null }
+        if (!ready) {
+            failures[key] = "the highlighting engine didn't start (${initError ?: "unknown error"})"
+            return null
+        }
+        val scope = scopes[key]
+        if (scope == null) {
+            failures[key] = "its grammar wasn't bundled in this build"
+            return null
+        }
+        return try {
+            TextMateLanguage.create(scope, false)
+        } catch (e: Throwable) {
+            failures[key] = (e.message ?: e.javaClass.simpleName).take(140)
+            null
+        }
+    }
+
+    /** A one-time, user-facing reason why a language couldn't be highlighted (null if none or already shown). */
+    @Synchronized
+    fun problemOnce(key: String): String? {
+        val why = failures[key] ?: return null
+        return if (reported.add(key)) why else null
     }
 }
 
@@ -147,6 +172,23 @@ private fun CodeEditor.setProp(name: String, value: Any) {
     }
 }
 
+/** Calls an optional editor method by name; silently does nothing if this version doesn't have it. */
+private fun CodeEditor.tryCall(name: String, vararg args: Any) {
+    try {
+        val types = Array<Class<*>>(args.size) { i ->
+            when (val a = args[i]) {
+                is Boolean -> java.lang.Boolean.TYPE
+                is Float -> java.lang.Float.TYPE
+                is Int -> java.lang.Integer.TYPE
+                else -> a.javaClass
+            }
+        }
+        javaClass.getMethod(name, *types).invoke(this, *args)
+    } catch (e: Throwable) {
+        // Not available in this editor version.
+    }
+}
+
 class ToolKey(val label: String, val text: String, val close: String? = null, val tab: Boolean = false)
 
 val TOOL_KEYS: List<ToolKey> = listOf(
@@ -168,6 +210,21 @@ class GitodeEditor(context: Context) : CodeEditor(context) {
     var indentProvider: () -> SmartConfig = { SmartConfig(4, true, null) }
 
     private class Ctx(val line: Int, val col: Int, val before: String, val after: String)
+
+    /** Hides the keyboard and drops the editor's focus so it stays hidden until the editor is tapped again. */
+    fun dismissKeyboard() {
+        try {
+            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            imm.hideSoftInputFromWindow(windowToken, 0)
+        } catch (e: Throwable) {
+            // Nothing to hide.
+        }
+        try {
+            clearFocus()
+        } catch (e: Throwable) {
+            // Ignore.
+        }
+    }
 
     private fun ctx(): Ctx {
         val ln = cursor.leftLine
@@ -357,7 +414,7 @@ private fun applyChrome(scheme: EditorColorScheme, c: GitodeColors, overrideText
     set(EditorColorScheme.LINE_NUMBER_BACKGROUND, c.gutterBg)
     set(EditorColorScheme.LINE_NUMBER, c.gutterText)
     set(EditorColorScheme.LINE_NUMBER_CURRENT, c.text)
-    set(EditorColorScheme.LINE_DIVIDER, c.outline)
+    set(EditorColorScheme.LINE_DIVIDER, c.dim.copy(alpha = 0.55f))
     set(EditorColorScheme.CURRENT_LINE, c.currentLine)
     set(EditorColorScheme.SELECTION_INSERT, c.accent)
     set(EditorColorScheme.SELECTION_HANDLE, c.accent)
@@ -374,6 +431,15 @@ private fun createEditor(context: Context, vm: MainViewModel, holder: EditorHold
     ed.setProp("symbolPairAutoCompletion", false)
     ed.setProp("autoIndent", false)
     try { ed.getComponent(EditorAutoCompletion::class.java).isEnabled = false } catch (e: Throwable) { /* keep default */ }
+
+    // Line numbers: stay fixed while the code scrolls sideways, sit a little away from the screen edge,
+    // and are separated from the text by a visible line.
+    val dp = context.resources.displayMetrics.density
+    ed.tryCall("setPinLineNumber", true)
+    ed.tryCall("setLineNumberMarginLeft", 10f * dp)
+    ed.tryCall("setDividerWidth", 1.5f * dp)
+    ed.tryCall("setDividerMargin", 8f * dp, 8f * dp)
+
     ed.setInputType(
         InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
             InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
@@ -489,8 +555,16 @@ private fun sync(
     }
 
     if (holder.languageBuffer !== buffer || holder.languageSyntaxOn != syntaxOn) {
-        val lang: Language = if (syntaxOn) TextMate.languageFor(buffer.file.name) ?: EmptyLanguage() else EmptyLanguage()
-        ed.setEditorLanguage(lang)
+        val key = Fs.languageOf(buffer.file.name)
+        val created: Language? = if (syntaxOn) TextMate.languageFor(buffer.file.name) else null
+        if (syntaxOn && key != null && created == null) {
+            // Tell the user (once per language) why this file isn't coloured, instead of failing silently.
+            TextMate.problemOnce(key)?.let { why ->
+                val label = Fs.typeLabel(buffer.file.name, false)
+                ed.post { vm.toast("Syntax highlighting for $label isn't available: $why") }
+            }
+        }
+        ed.setEditorLanguage(created ?: EmptyLanguage())
         holder.languageBuffer = buffer
         holder.languageSyntaxOn = syntaxOn
     }
@@ -554,10 +628,13 @@ fun CodeEditorView(
 @Composable
 fun SmartKeysBar(editor: GitodeEditor?, modifier: Modifier = Modifier) {
     val c = G.c
-    Box(modifier.fillMaxWidth().background(c.surface)) {
+    // The empty click stops taps between the keys from counting as "blank" taps (which hide the keyboard).
+    Box(modifier.fillMaxWidth().background(c.surface).noRippleClick { }) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.outline))
         Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 6.dp, vertical = 5.dp),
+            // extra space on the left keeps the first key clear of the drawer's edge-swipe strip
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                .padding(start = 30.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             for (k in TOOL_KEYS) {
