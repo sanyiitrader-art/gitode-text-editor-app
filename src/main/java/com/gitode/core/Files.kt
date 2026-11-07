@@ -56,7 +56,6 @@ object Fs {
         "xml" to "xml", "xsd" to "xml", "xsl" to "xml", "svg" to "xml", "plist" to "xml",
         "pro" to "qmake", "pri" to "qmake", "prf" to "qmake",
         "gitignore" to "gitignore", "dockerignore" to "gitignore", "npmignore" to "gitignore",
-        // more languages
         "cs" to "csharp", "csx" to "csharp",
         "go" to "go",
         "dart" to "dart",
@@ -73,9 +72,23 @@ object Fs {
         "jl" to "julia",
         "m" to "matlab",
         "scala" to "scala", "sc" to "scala", "sbt" to "scala",
-        // extras
-        "c" to "c",
+        // newest additions
         "md" to "markdown", "markdown" to "markdown",
+        "txt" to "text",
+        "c" to "c",
+        "graphql" to "graphql", "gql" to "graphql", "graphqls" to "graphql",
+        "hs" to "haskell", "lhs" to "haskell",
+        "ex" to "elixir", "exs" to "elixir",
+        "erl" to "erlang", "hrl" to "erlang",
+        "pl" to "perl", "pm" to "perl",
+        "asm" to "asm", "s" to "asm", "nasm" to "asm",
+        "zig" to "zig", "zon" to "zig",
+        "nix" to "nix",
+        "tf" to "terraform", "tfvars" to "terraform", "hcl" to "terraform",
+        "vue" to "vue",
+        "svelte" to "svelte",
+        "clj" to "clojure", "cljs" to "clojure", "cljc" to "clojure", "edn" to "clojure",
+        // extras
         "gradle" to "groovy", "groovy" to "groovy",
         "ini" to "ini", "cfg" to "ini", "properties" to "ini",
     )
@@ -90,7 +103,10 @@ object Fs {
         "ini" to "Config", "sql" to "SQL", "csharp" to "C#", "go" to "Go", "dart" to "Dart",
         "lua" to "Lua", "powershell" to "PowerShell", "dockerfile" to "Dockerfile",
         "makefile" to "Makefile", "r" to "R", "julia" to "Julia", "matlab" to "MATLAB",
-        "scala" to "Scala",
+        "scala" to "Scala", "text" to "Text", "graphql" to "GraphQL", "haskell" to "Haskell",
+        "elixir" to "Elixir", "erlang" to "Erlang", "perl" to "Perl", "asm" to "Assembly",
+        "zig" to "Zig", "nix" to "Nix", "terraform" to "Terraform", "vue" to "Vue",
+        "svelte" to "Svelte", "clojure" to "Clojure",
     )
 
     /** Languages that have a logo bundled by tools/prepare.py (the key is also the logo's file name). */
@@ -99,11 +115,16 @@ object Fs {
         "rust", "toml", "gdscript", "tsx", "yaml", "xml", "qmake", "gitignore",
         "csharp", "go", "dart", "lua", "sql", "html", "css", "json", "shellscript", "powershell",
         "dockerfile", "makefile", "r", "julia", "matlab", "scala",
+        "markdown", "txt", "c", "graphql", "haskell", "elixir", "erlang", "perl", "asm", "zig",
+        "nix", "terraform", "vue", "svelte", "clojure",
     )
 
     fun ext(name: String): String = name.substringAfterLast('.', "").lowercase()
 
-    /** TextMate language key for a file name, or null for plain text. */
+    /**
+     * Language key for a file name, or null for unknown files. ".txt" gives "text", a language
+     * with no highlighting and no smart pairing (plain text).
+     */
     fun languageOf(name: String): String? {
         val lower = name.lowercase()
         // files recognised by their name rather than an extension
@@ -112,14 +133,17 @@ object Fs {
         return LANG_BY_EXT[ext(name)]
     }
 
+    /** True for Markdown files (the editor offers a preview switch for them). */
+    fun isMarkdown(name: String): Boolean = languageOf(name) == "markdown"
+
     /** Key of the bundled logo for a file name, or null if it has none. */
     fun iconKeyOf(name: String): String? {
         val lang = languageOf(name) ?: return null
         // .dockerignore and .npmignore share the ignore-file highlighting but not Git's logo.
         if (lang == "gitignore" && ext(name) != "gitignore") return null
         val key = when (lang) {
-            "c" -> "cpp"
             "jsonc" -> "json"
+            "text" -> "txt"
             else -> lang
         }
         return if (key in LOGO_KEYS) key else null
