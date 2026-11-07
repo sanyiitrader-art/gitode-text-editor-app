@@ -46,6 +46,13 @@
             </intent-filter>
         </activity>
 
+        <!-- "Open with" for files Gitode can't edit (PDF, audio, video...). Not exported. -->
+        <provider
+            android:name=".FileShareProvider"
+            android:authorities="com.gitode.files"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
         <!-- Lets WorkManager run artifact downloads as a visible foreground task -->
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"
