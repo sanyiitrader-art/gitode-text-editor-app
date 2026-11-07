@@ -30,6 +30,71 @@ sealed class SmartResult {
     ) : SmartResult()
 }
 
+/** How one language wants its code edited. */
+class LangRules(
+    /** Line-comment markers; pairing is switched off after one. */
+    val lineComments: List<String>,
+    /** C-style block comments, for example in the middle of a Javadoc. */
+    val blockComments: Boolean = false,
+    /** XML-style comments (the marker before the dash dash). */
+    val xmlComments: Boolean = false,
+    /** Bracket and quote pairing at all. */
+    val pairs: Boolean = true,
+    /** "<" pairs with ">" (generics, tags). */
+    val angle: Boolean = false,
+    /** A trailing ":" starts an indented block (Python, YAML, GDScript). */
+    val colonOpens: Boolean = false,
+    /** A trailing backslash continues the line, so the next line is indented. */
+    val continuation: Boolean = false,
+    /** "- item" lines continue as "- " on Enter. */
+    val listDash: Boolean = false,
+    /** Lines (trimmed) matching this open an indented block, for example Ruby's def/if/do. */
+    val opener: Regex? = null,
+    /** ' is also used for lifetimes, so it is not paired after < & or a comma. */
+    val rustQuotes: Boolean = false,
+)
+
+object Langs {
+    private val C_LIKE = LangRules(listOf("//"), blockComments = true)
+    private val C_LIKE_ANGLE = LangRules(listOf("//"), blockComments = true, angle = true)
+    private val MARKUP = LangRules(emptyList(), xmlComments = true, angle = true)
+    private val DEFAULT = LangRules(listOf("//", "#"), blockComments = true)
+
+    private val RUBY_OPENER = Regex(
+        """^(?!.*\bend\s*$)(?:(?:def|class|module|if|unless|while|until|for|case|begin|else|elsif|ensure|rescue|when)\b.*|.*\bdo(?:\s*\|[^|]*\|)?)$""",
+    )
+
+    private val table: Map<String, LangRules> = mapOf(
+        "python" to LangRules(listOf("#"), colonOpens = true),
+        "gdscript" to LangRules(listOf("#"), colonOpens = true),
+        "yaml" to LangRules(listOf("#"), colonOpens = true, listDash = true),
+        "toml" to LangRules(listOf("#")),
+        "ruby" to LangRules(listOf("#"), opener = RUBY_OPENER),
+        "kotlin" to C_LIKE_ANGLE,
+        "java" to C_LIKE_ANGLE,
+        "typescript" to C_LIKE_ANGLE,
+        "tsx" to C_LIKE_ANGLE,
+        "javascript" to C_LIKE,
+        "cpp" to C_LIKE_ANGLE,
+        "c" to C_LIKE,
+        "swift" to C_LIKE_ANGLE,
+        "rust" to LangRules(listOf("//"), blockComments = true, angle = true, rustQuotes = true),
+        "php" to LangRules(listOf("//", "#"), blockComments = true),
+        "csharp" to C_LIKE_ANGLE,
+        "dart" to C_LIKE_ANGLE,
+        "go" to C_LIKE,
+        "groovy" to C_LIKE,
+        "css" to LangRules(emptyList(), blockComments = true),
+        "xml" to MARKUP,
+        "html" to MARKUP,
+        "qmake" to LangRules(listOf("#"), continuation = true),
+        "shellscript" to LangRules(listOf("#"), continuation = true),
+        "gitignore" to LangRules(listOf("#"), pairs = false),
+    )
+
+    fun of(lang: String?): LangRules = lang?.let { table[it] } ?: DEFAULT
+}
+
 /** Pure text logic for smart actions. [before]/[after] are the parts of the current line around the cursor. */
 object SmartEdit {
     private val PAIRS = mapOf(
@@ -38,14 +103,32 @@ object SmartEdit {
     private val CLOSERS = setOf(')', ']', '}', '>')
     private val QUOTES = setOf('\'', '"', '`')
     private const val PAIR_BEFORE = ")]};,.:>"
-    private val COMMENT = Regex("""(^|\s)//|^\s*/\*|^\s*\*\s|(^|\s)#\s""")
-    private val COLON_LANGS = setOf("python", "yaml", "gdscript")
 
-    private fun inComment(before: String) = COMMENT.containsMatchIn(before)
+    private fun inComment(before: String, r: LangRules): Boolean {
+        for (marker in r.lineComments) {
+            var i = before.indexOf(marker)
+            while (i >= 0) {
+                val startsOk = i == 0 || before[i - 1].isWhitespace()
+                val interpolation = marker == "#" && before.getOrNull(i + 1) == '{'
+                if (startsOk && !interpolation) return true
+                i = before.indexOf(marker, i + 1)
+            }
+        }
+        if (r.blockComments) {
+            val t = before.trimStart()
+            if (t.startsWith("/*") || t.startsWith("* ") || t == "*") return true
+        }
+        if (r.xmlComments && before.lastIndexOf("<!--") > before.lastIndexOf("-->")) return true
+        return false
+    }
 
     private fun canPairBefore(next: Char?) = next == null || next.isWhitespace() || PAIR_BEFORE.indexOf(next) >= 0
 
-    fun typed(ch: Char, before: String, after: String, hasSelection: Boolean): SmartResult {
+    fun typed(ch: Char, before: String, after: String, hasSelection: Boolean, lang: String? = null): SmartResult {
+        val rules = Langs.of(lang)
+        if (!rules.pairs) return SmartResult.None
+        if ((ch == '<' || ch == '>') && !rules.angle) return SmartResult.None
+
         val close = PAIRS[ch]
         if (hasSelection) {
             return if (close != null) SmartResult.Wrap(ch.toString(), close.toString()) else SmartResult.None
@@ -63,12 +146,13 @@ object SmartEdit {
             if (skip) return SmartResult.Skip
         }
 
-        if (close == null || inComment(before)) return SmartResult.None
+        if (close == null || inComment(before, rules)) return SmartResult.None
 
         return when (ch) {
             in QUOTES -> {
                 when {
                     ch == '\'' && prev != null && (prev.isLetterOrDigit() || prev == '_') -> SmartResult.None
+                    ch == '\'' && rules.rustQuotes && prev != null && (prev == '<' || prev == '&' || prev == ',') -> SmartResult.None
                     before.count { it == ch } % 2 == 1 -> SmartResult.None
                     !canPairBefore(next) -> SmartResult.None
                     else -> SmartResult.Edit(ch.toString() + ch, cursorBack = 1)
@@ -88,27 +172,38 @@ object SmartEdit {
     }
 
     fun enter(before: String, after: String, cfg: SmartConfig): SmartResult {
+        val rules = Langs.of(cfg.lang)
         val indent = before.takeWhile { it == ' ' || it == '\t' }
-        val last = before.trimEnd().lastOrNull()
+        val trimmed = before.trimEnd()
+        val last = trimmed.lastOrNull()
         val nextCh = after.firstOrNull()
-        val lang = cfg.lang
+
+        val tagBetween = last == '>' && after.startsWith("</")
         val opens = last != null && (
             last in "{[(" ||
-                (last == ':' && lang != null && lang in COLON_LANGS) ||
-                (last == '>' && after.startsWith("</"))
-            )
+                (last == ':' && rules.colonOpens) ||
+                tagBetween
+            ) || (rules.opener?.matches(before.trim()) == true)
         val closes = last != null && nextCh != null && (
             (last == '{' && nextCh == '}') ||
                 (last == '[' && nextCh == ']') ||
                 (last == '(' && nextCh == ')') ||
-                (last == '>' && after.startsWith("</"))
+                tagBetween
             )
-        return when {
-            opens && closes -> SmartResult.Edit("\n" + indent + cfg.unit + "\n" + indent, cursorBack = indent.length + 1)
-            opens -> SmartResult.Edit("\n" + indent + cfg.unit)
-            indent.isNotEmpty() -> SmartResult.Edit("\n" + indent)
-            else -> SmartResult.None
+        if (opens && closes) {
+            return SmartResult.Edit("\n" + indent + cfg.unit + "\n" + indent, cursorBack = indent.length + 1)
         }
+        if (opens) return SmartResult.Edit("\n" + indent + cfg.unit)
+
+        if (rules.continuation && trimmed.endsWith("\\")) {
+            // The first continued line is indented; later ones keep that indentation.
+            return SmartResult.Edit("\n" + indent + if (indent.isEmpty()) cfg.unit else "")
+        }
+        if (rules.listDash) {
+            val t = before.trimStart()
+            if (t.startsWith("- ") && t.trim().length > 1) return SmartResult.Edit("\n$indent- ")
+        }
+        return if (indent.isNotEmpty()) SmartResult.Edit("\n" + indent) else SmartResult.None
     }
 
     fun backspace(before: String, after: String, cfg: SmartConfig): SmartResult {
@@ -119,7 +214,10 @@ object SmartEdit {
             val remove = if (n % width == 0) width else n % width
             return if (remove > 1) SmartResult.Edit("", deleteBefore = remove) else SmartResult.None
         }
+        val rules = Langs.of(cfg.lang)
+        if (!rules.pairs) return SmartResult.None
         val prev = before.last()
+        if (prev == '<' && !rules.angle) return SmartResult.None
         val close = PAIRS[prev]
         if (close != null && after.firstOrNull() == close) {
             return SmartResult.Edit("", deleteBefore = 1, deleteAfter = 1)
