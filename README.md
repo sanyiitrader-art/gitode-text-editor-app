@@ -24,14 +24,24 @@ installing a new one.
 
 - Launcher icons from `icon.png`: adaptive icon, artwork scaled uniformly into the
   safe zone, transparency preserved, no background colour added, nothing cropped.
-- TextMate grammars and themes (tm-grammars and tm-themes packages).
+- TextMate grammars and themes (tm-grammars and tm-themes packages), plus small
+  grammars written in the script itself (XML, plain text, Qt project, .gitignore).
 - Editor fonts from the google/fonts repository.
-- Language logos for the file explorer (devicon and simple-icons).
+- Language logos for the file explorer (devicon and simple-icons, plus a few drawn marks).
 - Theme preview screenshots from `theme-previews/`.
 
 These are downloaded or generated during the build and are not committed.
 If a font or logo cannot be downloaded the build still succeeds and the app falls
 back to a system font or a generic icon. The build log lists every warning.
+
+## Markdown
+
+Markdown files (`.md`, `.markdown`) get a switch at the right end of the file-name sheet.
+Off is the normal code editor (with line numbers and highlighting). On shows the rendered
+document: wrapped text, no line numbers, no editing, vertical scrolling only.
+Rendering uses commonmark-java (with tables, strikethrough and task lists) and Gitode's
+own drawing code. Images load from the web (https) or from files next to the document;
+SVG images use AndroidSVG.
 
 ## Theme preview screenshots
 
@@ -58,11 +68,13 @@ the placeholder text "Later".
 |---|---|---|
 | Sora Editor (Rosemoe) | code editor, TextMate engine | LGPL-2.1 |
 | Eclipse JGit | Git operations | EDL (BSD-3-Clause) |
+| commonmark-java | Markdown parsing | BSD-2-Clause |
+| AndroidSVG | SVG images in Markdown | Apache-2.0 |
 | tm-grammars, tm-themes | grammars and themes (each grammar keeps its original license) | MIT |
 | JetBrains Mono, Fira Code, Source Code Pro, IBM Plex Mono, Roboto Mono, Cascadia Code, Inconsolata, Noto Sans Mono | editor fonts | SIL OFL 1.1 |
 | Ubuntu Mono | editor font | Ubuntu Font Licence 1.0 |
 | devicon | language logos | MIT |
-| simple-icons | TOML, Godot and React logos | CC0 |
+| simple-icons | several language logos | CC0 |
 | AndroidX, Jetpack Compose, Kotlin, Kotlin coroutines, WorkManager | app framework | Apache-2.0 |
 
 Brand names and logos belong to their respective owners and are used only to
