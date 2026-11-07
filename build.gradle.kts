@@ -113,6 +113,14 @@ dependencies {
     implementation("io.github.Rosemoe.sora-editor:editor")
     implementation("io.github.Rosemoe.sora-editor:language-textmate")
 
+    // Markdown preview: commonmark parses, Gitode's own Compose code draws it
+    implementation("org.commonmark:commonmark:0.24.0")
+    implementation("org.commonmark:commonmark-ext-gfm-tables:0.24.0")
+    implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.24.0")
+    implementation("org.commonmark:commonmark-ext-task-list-items:0.24.0")
+    // SVG images in Markdown (badges are usually SVG)
+    implementation("com.caverock:androidsvg-aar:1.4")
+
     // Git
     implementation("org.eclipse.jgit:org.eclipse.jgit:5.13.3.202401111512-r")
     implementation("org.slf4j:slf4j-nop:1.7.36")
