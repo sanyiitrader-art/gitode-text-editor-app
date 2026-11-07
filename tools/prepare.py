@@ -3,7 +3,8 @@
 
 1. Launcher icons generated from icon.png (adaptive icon, transparent background).
 2. TextMate grammars and themes (tm-grammars / tm-themes through jsDelivr),
-   plus two small grammars written here: Qt project files (qmake) and .gitignore.
+   plus three small self-contained grammars written here: XML, Qt project files
+   (qmake) and .gitignore.
 3. Fonts (google/fonts repository).
 4. Language logos (devicon / simple-icons rasterised to PNG, plus a drawn XML logo).
 5. Theme preview screenshots copied from theme-previews/.
@@ -114,15 +115,18 @@ def make_icons():
 GRAMMAR_URL = "https://cdn.jsdelivr.net/npm/tm-grammars@1/grammars/{}.json"
 THEME_URL = "https://cdn.jsdelivr.net/npm/tm-themes@1/themes/{}.json"
 
+# "xml" is NOT listed here: it is a self-contained grammar written below, because
+# Ruby and PHP depend on it and the downloaded one did not load reliably.
 LANGS = [
     "python", "kotlin", "typescript", "tsx", "javascript", "toml", "gdscript",
     "cpp", "c", "swift", "java", "ruby", "php", "rust",
-    "json", "jsonc", "xml", "markdown", "yaml", "html", "css",
+    "json", "jsonc", "markdown", "yaml", "html", "css",
     "shellscript", "groovy", "ini", "sql", "csharp", "go", "dart",
+    "lua", "xsl",
 ]
 REQUIRED_LANGS = {
     "python", "kotlin", "typescript", "tsx", "javascript", "toml", "gdscript",
-    "cpp", "swift", "java", "ruby", "php", "rust", "yaml", "xml",
+    "cpp", "swift", "java", "ruby", "php", "rust", "yaml",
 }
 THEMES = [
     "dark-plus", "one-dark-pro", "dracula", "monokai", "nord", "github-dark",
@@ -137,6 +141,83 @@ LANG_CONFIG = {
         {"open": "[", "close": "]"},
         {"open": "(", "close": ")"},
     ],
+}
+
+XML_GRAMMAR = {
+    "name": "xml",
+    "scopeName": "text.xml",
+    "patterns": [
+        {"include": "#comment"},
+        {"include": "#cdata"},
+        {"include": "#doctype"},
+        {"include": "#processing"},
+        {"include": "#tag"},
+        {"include": "#entity"},
+    ],
+    "repository": {
+        "comment": {"name": "comment.block.xml", "begin": r"<!--", "end": r"-->"},
+        "cdata": {
+            "name": "string.unquoted.cdata.xml",
+            "begin": r"<!\[CDATA\[",
+            "end": r"\]\]>",
+        },
+        "doctype": {
+            "name": "meta.tag.sgml.doctype.xml",
+            "begin": r"<!DOCTYPE",
+            "end": r">",
+            "beginCaptures": {"0": {"name": "entity.name.tag.xml"}},
+            "patterns": [{"include": "#string"}],
+        },
+        "processing": {
+            "name": "meta.tag.preprocessor.xml",
+            "begin": r"(<\?)\s*([-_a-zA-Z0-9]+)",
+            "end": r"(\?>)",
+            "beginCaptures": {
+                "1": {"name": "punctuation.definition.tag.xml"},
+                "2": {"name": "entity.name.tag.xml"},
+            },
+            "endCaptures": {"1": {"name": "punctuation.definition.tag.xml"}},
+            "patterns": [{"include": "#attribute"}, {"include": "#string"}],
+        },
+        "tag": {
+            "name": "meta.tag.xml",
+            "begin": r"(</?)\s*([-_a-zA-Z0-9:.]+)",
+            "end": r"(/?>)",
+            "beginCaptures": {
+                "1": {"name": "punctuation.definition.tag.xml"},
+                "2": {"name": "entity.name.tag.xml"},
+            },
+            "endCaptures": {"1": {"name": "punctuation.definition.tag.xml"}},
+            "patterns": [{"include": "#attribute"}, {"include": "#string"}],
+        },
+        "attribute": {
+            "match": r"([-_a-zA-Z0-9:.]+)(=)",
+            "captures": {
+                "1": {"name": "entity.other.attribute-name.xml"},
+                "2": {"name": "punctuation.separator.key-value.xml"},
+            },
+        },
+        "string": {
+            "patterns": [
+                {
+                    "name": "string.quoted.double.xml",
+                    "begin": r'"',
+                    "end": r'"',
+                    "patterns": [{"include": "#entity"}],
+                },
+                {
+                    "name": "string.quoted.single.xml",
+                    "begin": r"'",
+                    "end": r"'",
+                    "patterns": [{"include": "#entity"}],
+                },
+            ]
+        },
+        "entity": {
+            "name": "constant.character.entity.xml",
+            "match": r"&(?:#[0-9]+|#x[0-9a-fA-F]+|[a-zA-Z_][a-zA-Z0-9_.-]*);",
+        },
+    },
 }
 
 # Qt project files (.pro, .pri, .prf) are written in qmake's language.
@@ -206,7 +287,46 @@ GITIGNORE_GRAMMAR = {
     ],
 }
 
-CUSTOM_GRAMMARS = {"qmake": QMAKE_GRAMMAR, "gitignore": GITIGNORE_GRAMMAR}
+CUSTOM_GRAMMARS = {"xml": XML_GRAMMAR, "qmake": QMAKE_GRAMMAR, "gitignore": GITIGNORE_GRAMMAR}
+
+
+def external_scope(include, own):
+    """The foreign scope an include points to, or None for local references."""
+    if not isinstance(include, str) or include.startswith("#") or include in ("$self", "$base"):
+        return None
+    scope = include.split("#", 1)[0]
+    if scope == "" or scope == own:
+        return None
+    return scope
+
+
+def strip_unresolved(node, own, known, removed):
+    """Remove includes of grammars that are not bundled, so loading never depends on them."""
+    if isinstance(node, dict):
+        pats = node.get("patterns")
+        if isinstance(pats, list):
+            keep = []
+            for p in pats:
+                if isinstance(p, dict) and set(p.keys()) <= {"include"}:
+                    sc = external_scope(p.get("include"), own)
+                    if sc is not None and sc not in known:
+                        removed.add(sc)
+                        continue
+                keep.append(p)
+            node["patterns"] = keep
+        repo = node.get("repository")
+        if isinstance(repo, dict):
+            for key, rule in list(repo.items()):
+                if isinstance(rule, dict) and set(rule.keys()) <= {"include"}:
+                    sc = external_scope(rule.get("include"), own)
+                    if sc is not None and sc not in known:
+                        removed.add(sc)
+                        repo[key] = {"patterns": []}
+        for value in node.values():
+            strip_unresolved(value, own, known, removed)
+    elif isinstance(node, list):
+        for value in node:
+            strip_unresolved(value, own, known, removed)
 
 
 def write_grammar(tm, name, data, scope):
@@ -229,19 +349,35 @@ def fetch_textmate():
     shutil.rmtree(tm, ignore_errors=True)
     (tm / "themes").mkdir(parents=True, exist_ok=True)
 
-    entries = []
+    downloaded = {}
     for lang in LANGS:
         try:
-            data = http_get(GRAMMAR_URL.format(lang))
-            scope = json.loads(data)["scopeName"]
+            grammar = json.loads(http_get(GRAMMAR_URL.format(lang)))
+            scope = grammar["scopeName"]
         except Exception as e:  # noqa: BLE001
             (fail if lang in REQUIRED_LANGS else warn)(f"grammar {lang}: {e}")
             continue
+        downloaded[lang] = (grammar, scope)
+
+    custom = {name: (g, g["scopeName"]) for name, g in CUSTOM_GRAMMARS.items()}
+    known = {scope for _, scope in downloaded.values()} | {scope for _, scope in custom.values()}
+
+    seen = {}
+    entries = []
+    for lang, (grammar, scope) in downloaded.items():
+        if scope in seen:
+            warn(f"grammar {lang} has the same scope as {seen[scope]} ({scope})")
+        seen[scope] = lang
+        removed = set()
+        strip_unresolved(grammar, scope, known, removed)
+        if removed:
+            print(f"  {lang}: dropped includes of missing grammars {sorted(removed)}")
+        data = json.dumps(grammar, separators=(",", ":")).encode("utf-8")
         entries.append(write_grammar(tm, lang, data, scope))
 
-    for name, grammar in CUSTOM_GRAMMARS.items():
+    for name, (grammar, scope) in custom.items():
         data = json.dumps(grammar, indent=1).encode("utf-8")
-        entries.append(write_grammar(tm, name, data, grammar["scopeName"]))
+        entries.append(write_grammar(tm, name, data, scope))
 
     (tm / "languages.json").write_text(json.dumps({"languages": entries}, indent=1), encoding="utf-8")
 
