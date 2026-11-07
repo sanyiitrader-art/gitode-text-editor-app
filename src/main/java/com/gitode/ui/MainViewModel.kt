@@ -1,0 +1,645 @@
+package com.gitode.ui
+
+import android.app.Application
+import android.net.Uri
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateSetOf
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.gitode.GitodeApp
+import com.gitode.core.DuplicateIndex
+import com.gitode.core.Fs
+import com.gitode.core.IndentStyle
+import com.gitode.core.SmartConfig
+import com.gitode.core.detectIndent
+import com.gitode.core.normalizeRepoName
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+
+/** One open text file. [text] is a snapshot; for the active file the editor is the source of truth. */
+class Buffer(file: File, text: String, val crlf: Boolean, dirty: Boolean = false) {
+    var file by mutableStateOf(file)
+    var text: String = text
+    var dirty by mutableStateOf(dirty)
+    var version = 0
+    var cursorLine = 0
+    var cursorColumn = 0
+    val indent: IndentStyle? = detectIndent(text)
+}
+
+class SearchHit(
+    val line: Int, // zero-based line number
+    val start: Int,
+    val end: Int,
+    val preview: String,
+    val previewStart: Int,
+    val previewEnd: Int,
+)
+
+/** Ask the editor to scroll to [line] (zero-based) and select columns [start]..[end]. */
+class Jump(val line: Int, val start: Int, val end: Int)
+
+sealed interface InlineEdit {
+    class Create(val parent: File, val isDir: Boolean) : InlineEdit
+    class Rename(val file: File) : InlineEdit
+}
+
+/** Hooks the live editor registers so the view model can reach it. */
+class EditorBridge {
+    var getText: (() -> String)? = null
+    /** Replaces every match (case-insensitive) in one undoable step and returns how many were replaced. */
+    var replaceAll: ((find: String, with: String) -> Int)? = null
+}
+
+class MainViewModel(app: Application) : AndroidViewModel(app) {
+    private val gitode = app as GitodeApp
+    val settings = gitode.settings
+    private val projects = gitode.projects
+    val recycleBin = gitode.recycleBin
+    private val duplicates = DuplicateIndex()
+
+    // ---- project and files
+    var root by mutableStateOf<File?>(null)
+        private set
+    var repoName by mutableStateOf<String?>(null)
+        private set
+    val buffers = mutableStateMapOf<String, Buffer>()
+    var active by mutableStateOf<Buffer?>(null)
+        private set
+    var imageFile by mutableStateOf<File?>(null)
+        private set
+    val bridge = EditorBridge()
+
+    // ---- messages and requests
+    var notice by mutableStateOf<String?>(null)
+    var duplicateNotice by mutableStateOf<String?>(null)
+        private set
+    /** Set when a file should be opened with another app; MainActivity consumes and clears it. */
+    var openWith by mutableStateOf<File?>(null)
+    var pendingJump by mutableStateOf<Jump?>(null)
+
+    // ---- explorer
+    val expanded = mutableStateSetOf<String>()
+    var highlighted by mutableStateOf<String?>(null)
+    var selectionMode by mutableStateOf(false)
+        private set
+    val selected = mutableStateSetOf<String>()
+    var inlineEdit by mutableStateOf<InlineEdit?>(null)
+        private set
+    var treeVersion by mutableIntStateOf(0)
+        private set
+    private val dirCache = HashMap<String, List<File>>()
+
+    // ---- search
+    var searchQuery by mutableStateOf("")
+        private set
+    var searchHits by mutableStateOf<List<SearchHit>>(emptyList())
+        private set
+    var searchRan by mutableStateOf(false)
+        private set
+
+    private val loose = File("/gitode-loose")
+    private val persistRoot: File get() = root ?: loose
+    private var restored = false
+    private var workJob: Job? = null
+    private var autosaveJob: Job? = null
+    private var searchJob: Job? = null
+    private var lastDupKey: String? = null
+
+    val rootName: String get() = root?.name ?: ""
+    val hasUnsaved: Boolean get() = buffers.values.any { it.dirty }
+
+    fun toast(message: String) { notice = message }
+
+    // ================================================================ project lifecycle
+
+    /** Restores the last project (or loose files) once storage access is available. */
+    fun restoreSession() {
+        if (restored) return
+        restored = true
+        viewModelScope.launch {
+            val last = withContext(Dispatchers.IO) { projects.last() }
+            switchTo(if (last != null && last.isDirectory) last else null)
+        }
+    }
+
+    fun openProject(dir: File) {
+        viewModelScope.launch { switchTo(dir) }
+    }
+
+    fun handleFolderUri(uri: Uri) {
+        val dir = Fs.pathFromUri(uri)
+        if (dir == null || !dir.isDirectory) {
+            toast("Gitode can't read that folder's location. Pick a folder from Internal storage or an SD card.")
+            return
+        }
+        openProject(dir)
+    }
+
+    fun handleFileUri(uri: Uri) {
+        val f = Fs.pathFromUri(uri)
+        if (f == null || !f.isFile) {
+            toast("Gitode can't read that file's location. Pick it from Internal storage or an SD card.")
+            return
+        }
+        openFile(f)
+    }
+
+    private suspend fun switchTo(dir: File?) {
+        persistAll()
+        resetState()
+        root = dir
+        val key = dir ?: loose
+        val stored = withContext(Dispatchers.IO) { projects.buffers(key) }
+        repoName = withContext(Dispatchers.IO) { projects.repoName(key) }
+        val act = withContext(Dispatchers.IO) { projects.active(key) }
+        if (dir != null) withContext(Dispatchers.IO) { projects.setLast(dir) }
+        for (b in stored) buffers[b.path] = Buffer(File(b.path), b.text, b.crlf, dirty = true)
+        if (act != null && (File(act).exists() || buffers.containsKey(act))) openFileInternal(File(act))
+        if (dir != null) {
+            viewModelScope.launch(Dispatchers.Default) { duplicates.rebuild(dir) }
+        } else {
+            duplicates.clear()
+        }
+    }
+
+    private fun resetState() {
+        workJob?.cancel()
+        autosaveJob?.cancel()
+        searchJob?.cancel()
+        buffers.clear()
+        active = null
+        imageFile = null
+        expanded.clear()
+        selected.clear()
+        selectionMode = false
+        highlighted = null
+        inlineEdit = null
+        dirCache.clear()
+        treeVersion++
+        duplicateNotice = null
+        lastDupKey = null
+        searchQuery = ""
+        searchHits = emptyList()
+        searchRan = false
+        pendingJump = null
+    }
+
+    // ================================================================ buffers
+
+    /** Pulls the live text from the editor into the active buffer. */
+    fun flushActive() {
+        val text = bridge.getText?.invoke() ?: return
+        active?.text = text
+    }
+
+    private suspend fun persistAll() {
+        flushActive()
+        val key = persistRoot
+        val dirty = buffers.values.filter { it.dirty }.map { Triple(it.file.path, it.text, it.crlf) }
+        val act = active?.file?.path ?: imageFile?.path
+        withContext(Dispatchers.IO) {
+            dirty.forEach { projects.saveBuffer(key, it.first, it.second, it.third) }
+            projects.setActive(key, act)
+        }
+    }
+
+    /** Called when the app goes to the background. */
+    fun onBackgrounded() {
+        viewModelScope.launch {
+            if (settings.autosave) saveAllNow() else persistAll()
+        }
+    }
+
+    fun openFile(file: File) {
+        viewModelScope.launch { openFileInternal(file) }
+    }
+
+    private suspend fun openFileInternal(file: File) {
+        flushActive()
+        val existing = buffers[file.path]
+        if (existing != null) {
+            activate(existing)
+            return
+        }
+        when (withContext(Dispatchers.IO) { Fs.kindOf(file) }) {
+            Fs.Kind.TEXT -> {
+                try {
+                    val data = withContext(Dispatchers.IO) { Fs.readText(file) }
+                    val b = Buffer(file, data.text, data.crlf)
+                    buffers[file.path] = b
+                    activate(b)
+                } catch (e: Exception) {
+                    toast("Couldn't open ${file.name}: ${e.message}")
+                }
+            }
+            Fs.Kind.IMAGE -> {
+                active = null
+                imageFile = file
+                duplicateNotice = null
+                val key = persistRoot
+                viewModelScope.launch(Dispatchers.IO) { projects.setActive(key, file.path) }
+            }
+            Fs.Kind.OTHER -> openWith = file
+        }
+    }
+
+    private fun activate(b: Buffer) {
+        active = b
+        imageFile = null
+        duplicateNotice = null
+        lastDupKey = null
+        val key = persistRoot
+        viewModelScope.launch(Dispatchers.IO) { projects.setActive(key, b.file.path) }
+        if (searchQuery.isNotEmpty()) search(searchQuery)
+    }
+
+    /** The editor calls this on every user edit (cheap: it only schedules work). */
+    fun onTextChanged() {
+        val b = active ?: return
+        b.dirty = true
+        b.version++
+        workJob?.cancel()
+        workJob = viewModelScope.launch {
+            delay(600)
+            flushActive()
+            val key = persistRoot
+            val text = b.text
+            withContext(Dispatchers.IO) { projects.saveBuffer(key, b.file.path, text, b.crlf) }
+            checkDuplicates(b)
+        }
+        if (settings.autosave) {
+            autosaveJob?.cancel()
+            autosaveJob = viewModelScope.launch {
+                delay(settings.autosaveDelaySec.coerceAtLeast(1) * 1000L)
+                save(b)
+            }
+        }
+    }
+
+    suspend fun save(b: Buffer): Boolean {
+        if (b === active) flushActive()
+        val text = b.text
+        val versionAtStart = b.version
+        return try {
+            val key = persistRoot
+            withContext(Dispatchers.IO) {
+                Fs.writeText(b.file, text, b.crlf)
+                projects.dropBuffer(key, b.file.path)
+            }
+            if (b.version == versionAtStart) b.dirty = false
+            withContext(Dispatchers.Default) { duplicates.update(b.file.path, text) }
+            true
+        } catch (e: Exception) {
+            toast("Couldn't save ${b.file.name}: ${e.message}")
+            false
+        }
+    }
+
+    suspend fun saveCurrent(): Boolean {
+        val b = active ?: return true
+        return save(b)
+    }
+
+    suspend fun saveAllNow(): Boolean {
+        flushActive()
+        var ok = true
+        for (b in buffers.values.filter { it.dirty }.toList()) {
+            if (!save(b)) ok = false
+        }
+        return ok
+    }
+
+    // ================================================================ duplicates
+
+    private suspend fun checkDuplicates(b: Buffer) {
+        val text = b.text
+        val path = b.file.path
+        val others = withContext(Dispatchers.Default) {
+            duplicates.update(path, text)
+            duplicates.duplicatesOf(path)
+        }
+        if (b !== active) return
+        if (others.isEmpty()) {
+            lastDupKey = null
+            duplicateNotice = null
+            return
+        }
+        val names = others.map { File(it).name }.distinct().sorted()
+        val key = "${text.length}:${text.hashCode()}:${names.joinToString()}"
+        if (key == lastDupKey) return // already reminded about this exact content
+        lastDupKey = key
+        val shown = names.take(3).joinToString(", ") + if (names.size > 3) " and ${names.size - 3} more" else ""
+        duplicateNotice = "Duplicate content detected: This content already exists in $shown."
+    }
+
+    fun dismissDuplicate() { duplicateNotice = null }
+
+    // ================================================================ smart editing config
+
+    fun smartConfig(b: Buffer?): SmartConfig {
+        val ind = b?.indent
+        val lang = b?.let { Fs.languageOf(it.file.name) }
+        return SmartConfig(ind?.width ?: settings.tabWidth, ind?.useSpaces ?: settings.useSpaces, lang)
+    }
+
+    // ================================================================ repository name
+
+    /** Returns an error message, or null on success. */
+    fun setRepo(input: String): String? {
+        val dir = root ?: return "Open a folder first"
+        val name = normalizeRepoName(input)
+            ?: return "Use letters, numbers, dots, dashes or underscores (up to 100 characters)"
+        repoName = name
+        viewModelScope.launch(Dispatchers.IO) { projects.setRepoName(dir, name) }
+        return null
+    }
+
+    // ================================================================ search, go to line, replace
+
+    fun search(query: String) {
+        searchQuery = query
+        searchJob?.cancel()
+        if (query.isEmpty()) {
+            searchHits = emptyList()
+            searchRan = false
+            return
+        }
+        flushActive()
+        val text = active?.text
+        if (text == null) {
+            searchHits = emptyList()
+            searchRan = true
+            return
+        }
+        searchJob = viewModelScope.launch(Dispatchers.Default) {
+            val hits = findHits(text, query)
+            withContext(Dispatchers.Main) {
+                searchHits = hits
+                searchRan = true
+            }
+        }
+    }
+
+    private fun findHits(text: String, query: String): List<SearchHit> {
+        val hits = ArrayList<SearchHit>()
+        var lineNo = 0
+        for (line in text.split('\n')) {
+            var i = line.indexOf(query, 0, ignoreCase = true)
+            while (i >= 0 && hits.size < MAX_HITS) {
+                val from = (i - 30).coerceAtLeast(0)
+                val to = (i + query.length + 50).coerceAtMost(line.length)
+                val prefix = if (from > 0) "…" else ""
+                val suffix = if (to < line.length) "…" else ""
+                val raw = line.substring(from, to)
+                val trimmed = raw.trimStart()
+                val lead = raw.length - trimmed.length
+                val ms = (prefix.length + (i - from) - lead).coerceAtLeast(0)
+                hits.add(SearchHit(lineNo, i, i + query.length, prefix + trimmed + suffix, ms, ms + query.length))
+                i = line.indexOf(query, i + query.length, ignoreCase = true)
+            }
+            if (hits.size >= MAX_HITS) break
+            lineNo++
+        }
+        return hits
+    }
+
+    fun jumpToHit(h: SearchHit) { pendingJump = Jump(h.line, h.start, h.end) }
+
+    fun lineCount(): Int {
+        flushActive()
+        val t = active?.text ?: return 0
+        return t.count { it == '\n' } + 1
+    }
+
+    /** Returns false (and does nothing) if [line] (one-based) is out of range. */
+    fun gotoLine(line: Int): Boolean {
+        val total = lineCount()
+        if (line !in 1..total) return false
+        pendingJump = Jump(line - 1, 0, 0)
+        return true
+    }
+
+    /** Replaces every match in the current file. Returns the number of replacements. */
+    fun replaceAll(find: String, with: String): Int {
+        val n = bridge.replaceAll?.invoke(find, with) ?: 0
+        toast(if (n == 0) "No matches found" else "Replaced $n occurrence${if (n == 1) "" else "s"}")
+        if (n > 0 && searchQuery.isNotEmpty()) search(searchQuery)
+        return n
+    }
+
+    // ================================================================ explorer
+
+    fun children(dir: File): List<File> {
+        treeVersion // read so composables listing a folder refresh after changes
+        return dirCache.getOrPut(dir.path) { Fs.list(dir) }
+    }
+
+    fun invalidate() {
+        dirCache.clear()
+        treeVersion++
+    }
+
+    fun afterRecycleRestore() {
+        invalidate()
+        root?.let { dir -> viewModelScope.launch(Dispatchers.Default) { duplicates.rebuild(dir) } }
+    }
+
+    fun tapFile(file: File) {
+        cancelInline()
+        highlighted = file.path
+        if (selectionMode) toggleSelect(file) else openFile(file)
+    }
+
+    fun tapFolder(dir: File) {
+        cancelInline()
+        highlighted = dir.path
+        if (expanded.contains(dir.path)) collapse(dir) else expanded.add(dir.path)
+    }
+
+    private fun collapse(dir: File) {
+        expanded.remove(dir.path)
+        val under = selected.filter { it.startsWith(dir.path + "/") }
+        selected.removeAll(under.toSet())
+    }
+
+    /** A tap on empty space clears the highlight and leaves selection mode. */
+    fun tapBlank() {
+        cancelInline()
+        highlighted = null
+        if (selectionMode) exitSelection()
+    }
+
+    fun enterSelection(file: File) {
+        cancelInline()
+        selectionMode = true
+        selected.clear()
+        selected.add(file.path)
+        highlighted = null
+    }
+
+    fun toggleSelect(file: File) {
+        if (!selected.remove(file.path)) selected.add(file.path)
+    }
+
+    fun exitSelection() {
+        selectionMode = false
+        selected.clear()
+    }
+
+    // ---- inline create / rename
+
+    private fun createTarget(): File? {
+        val r = root ?: return null
+        val h = highlighted?.let { File(it) } ?: return r
+        return when {
+            h.isDirectory -> h
+            h.exists() -> h.parentFile ?: r
+            else -> r
+        }
+    }
+
+    fun startCreate(isDir: Boolean) {
+        val target = createTarget() ?: return
+        val r = root
+        if (target != r) expanded.add(target.path) // a collapsed highlighted folder opens first
+        inlineEdit = InlineEdit.Create(target, isDir)
+    }
+
+    fun startRename(file: File) {
+        cancelInline()
+        inlineEdit = InlineEdit.Rename(file)
+    }
+
+    fun cancelInline() { inlineEdit = null }
+
+    /** Returns an error message to show on the field, or null when the edit succeeded. */
+    suspend fun commitInline(raw: String): String? {
+        val edit = inlineEdit ?: return null
+        when (edit) {
+            is InlineEdit.Create -> {
+                Fs.validateName(raw, edit.parent, edit.isDir)?.let { return it }
+                return try {
+                    val created = withContext(Dispatchers.IO) {
+                        if (edit.isDir) Fs.createDir(edit.parent, raw) else Fs.createFile(edit.parent, raw)
+                    }
+                    expanded.add(edit.parent.path)
+                    highlighted = created.path
+                    inlineEdit = null
+                    invalidate()
+                    null
+                } catch (e: Exception) {
+                    "Couldn't create it: ${e.message}"
+                }
+            }
+            is InlineEdit.Rename -> {
+                val old = edit.file
+                val newName = raw.trimStart()
+                if (newName == old.name) {
+                    inlineEdit = null
+                    return null
+                }
+                val parent = old.parentFile ?: return "Can't rename this item"
+                Fs.validateName(raw, parent, old.isDirectory, ignore = old)?.let { return it }
+                return try {
+                    val renamed = withContext(Dispatchers.IO) { Fs.rename(old, raw) }
+                    remapPaths(old.path, renamed.path)
+                    inlineEdit = null
+                    highlighted = renamed.path
+                    invalidate()
+                    null
+                } catch (e: Exception) {
+                    "Couldn't rename it: ${e.message}"
+                }
+            }
+        }
+    }
+
+    private fun mapPath(p: String, old: String, new: String): String? = when {
+        p == old -> new
+        p.startsWith("$old/") -> new + p.substring(old.length)
+        else -> null
+    }
+
+    private suspend fun remapPaths(old: String, new: String) {
+        flushActive()
+        val key = persistRoot
+        for (e in buffers.entries.toList()) {
+            val mapped = mapPath(e.key, old, new) ?: continue
+            val b = e.value
+            buffers.remove(e.key)
+            b.file = File(mapped)
+            buffers[mapped] = b
+        }
+        imageFile?.let { f -> mapPath(f.path, old, new)?.let { imageFile = File(it) } }
+        for (p in expanded.toList()) {
+            mapPath(p, old, new)?.let { expanded.remove(p); expanded.add(it) }
+        }
+        withContext(Dispatchers.IO) { projects.remapPaths(key, old, new) }
+        root?.let { dir -> viewModelScope.launch(Dispatchers.Default) { duplicates.rebuild(dir) } }
+    }
+
+    // ---- delete (always through the Recycle bin)
+
+    private fun inside(path: String, parent: String) = path == parent || path.startsWith("$parent/")
+
+    /** Moves [file] (or a whole folder) to the Recycle bin. Returns an error message or null. */
+    suspend fun trash(file: File): String? {
+        flushActive()
+        val key = persistRoot
+        val affected = buffers.values.filter { inside(it.file.path, file.path) }.toList()
+        // Save pending edits first so the recycled copy contains the latest work.
+        for (b in affected.filter { it.dirty }) {
+            try {
+                withContext(Dispatchers.IO) { Fs.writeText(b.file, b.text, b.crlf) }
+            } catch (e: Exception) {
+                return "Couldn't save ${b.file.name} before deleting: ${e.message}"
+            }
+        }
+        try {
+            withContext(Dispatchers.IO) { recycleBin.trash(file) }
+        } catch (e: Exception) {
+            invalidate()
+            return e.message ?: "Couldn't move it to the Recycle bin"
+        }
+        for (b in affected) {
+            buffers.remove(b.file.path)
+            withContext(Dispatchers.IO) { projects.dropBuffer(key, b.file.path) }
+            duplicates.update(b.file.path, null)
+        }
+        if (active != null && affected.any { it === active }) {
+            active = null
+            withContext(Dispatchers.IO) { projects.setActive(key, null) }
+        }
+        imageFile?.let { if (inside(it.path, file.path)) imageFile = null }
+        selected.removeAll(selected.filter { inside(it, file.path) }.toSet())
+        expanded.removeAll(expanded.filter { inside(it, file.path) }.toSet())
+        highlighted?.let { if (inside(it, file.path)) highlighted = null }
+        invalidate()
+        return null
+    }
+
+    /** Deletes every selected file (moving each to the Recycle bin). Returns an error message or null. */
+    suspend fun trashSelected(): String? {
+        val files = selected.map { File(it) }
+        var error: String? = null
+        for (f in files) {
+            val e = trash(f)
+            if (e != null && error == null) error = e
+        }
+        exitSelection()
+        return error
+    }
+
+    companion object {
+        private const val MAX_HITS = 1000
+    }
+}
