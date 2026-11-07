@@ -5,7 +5,7 @@
 2. TextMate grammars and themes (tm-grammars / tm-themes through jsDelivr),
    plus two small grammars written here: Qt project files (qmake) and .gitignore.
 3. Fonts (google/fonts repository).
-4. Language logos (devicon / simple-icons rasterised to PNG).
+4. Language logos (devicon / simple-icons rasterised to PNG, plus a drawn XML logo).
 5. Theme preview screenshots copied from theme-previews/.
 
 Everything generated lives in src/main/assets and src/main/res/mipmap-*,
@@ -317,7 +317,7 @@ def fetch_fonts():
 DEVICON = "https://cdn.jsdelivr.net/gh/devicons/devicon@v2.16.0/icons/{0}/{0}-original.svg"
 SIMPLE = "https://cdn.jsdelivr.net/npm/simple-icons@11/icons/{}.svg"
 
-# key used by the app -> (source, slug, optional fill colour)
+# key used by the app (the language key) -> (source, slug, optional fill colour)
 LOGOS = {
     "python": ("devicon", "python", None),
     "kotlin": ("devicon", "kotlin", None),
@@ -332,7 +332,35 @@ LOGOS = {
     "toml": ("simple", "toml", "#C2603E"),
     "gdscript": ("simple", "godotengine", "#478CBF"),
     "tsx": ("simple", "react", "#61DAFB"),
+    "yaml": ("simple", "yaml", "#CB171E"),
+    "qmake": ("simple", "qt", "#41CD52"),      # Qt project files (.pro)
+    "gitignore": ("simple", "git", "#F05032"),
+    "xml": ("local", None, None),              # drawn here: a "</>" mark
 }
+
+# XML has no suitable brand logo, so its mark is drawn from plain strokes (no fonts needed).
+XML_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#F58220" '
+    'stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">'
+    '<polyline points="8,6 2.5,12 8,18"/><polyline points="16,6 21.5,12 16,18"/>'
+    '<line x1="14" y1="4.5" x2="10" y2="19.5"/></svg>'
+)
+
+# If a logo download fails, these still get a simple labelled badge instead of a generic icon.
+BADGES = {
+    "yaml": ("YML", "#CB171E"),
+    "qmake": ("PRO", "#41CD52"),
+    "gitignore": ("GIT", "#F05032"),
+}
+
+
+def badge_svg(text, color):
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">'
+        f'<rect width="96" height="96" rx="18" fill="{color}"/>'
+        '<text x="48" y="61" font-family="DejaVu Sans, Arial, sans-serif" font-size="32" '
+        f'font-weight="700" fill="#ffffff" text-anchor="middle">{text}</text></svg>'
+    )
 
 
 def fetch_logos():
@@ -346,16 +374,29 @@ def fetch_logos():
         return
     got = 0
     for key, (source, slug, color) in LOGOS.items():
+        svg = None
         try:
-            url = DEVICON.format(slug) if source == "devicon" else SIMPLE.format(slug)
-            svg = http_get(url).decode("utf-8")
-            if color:
-                svg = re.sub(r"<svg ", f'<svg fill="{color}" ', svg, count=1)
+            if source == "local":
+                svg = XML_SVG
+            else:
+                url = DEVICON.format(slug) if source == "devicon" else SIMPLE.format(slug)
+                svg = http_get(url).decode("utf-8")
+                if color:
+                    svg = re.sub(r"<svg ", f'<svg fill="{color}" ', svg, count=1)
+        except Exception as e:  # noqa: BLE001
+            if key in BADGES:
+                text, badge_color = BADGES[key]
+                svg = badge_svg(text, badge_color)
+                warn(f"logo {key}: download failed ({e}); using a drawn badge instead")
+            else:
+                warn(f"logo {key}: {e} (the app falls back to a generic file icon)")
+                continue
+        try:
             png = cairosvg.svg2png(bytestring=svg.encode("utf-8"), output_width=96, output_height=96)
             (out / f"{key}.png").write_bytes(png)
             got += 1
         except Exception as e:  # noqa: BLE001
-            warn(f"logo {key}: {e} (the app falls back to a generic file icon)")
+            warn(f"logo {key}: couldn't render ({e}) (the app falls back to a generic file icon)")
     print(f"logos: {got}/{len(LOGOS)}")
 
 
