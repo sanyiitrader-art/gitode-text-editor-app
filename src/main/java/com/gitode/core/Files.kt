@@ -32,18 +32,33 @@ object Fs {
 
     private val ILLEGAL_CHARS = charArrayOf('/', '\\', ':', '*', '?', '"', '<', '>', '|')
 
+    /**
+     * File extension -> language key (also the key of the TextMate grammar).
+     * For ".gitignore" the extension is "gitignore", because the name starts with the dot.
+     */
     private val LANG_BY_EXT = mapOf(
+        // required languages
         "py" to "python", "pyw" to "python",
         "kt" to "kotlin", "kts" to "kotlin",
-        "ts" to "typescript", "mts" to "typescript", "cts" to "typescript", "tsx" to "tsx",
+        "ts" to "typescript", "mts" to "typescript", "cts" to "typescript",
+        "tsx" to "tsx",
         "js" to "javascript", "mjs" to "javascript", "cjs" to "javascript", "jsx" to "javascript",
-        "toml" to "toml", "gd" to "gdscript",
-        "cpp" to "cpp", "cc" to "cpp", "cxx" to "cpp", "hpp" to "cpp", "hh" to "cpp", "hxx" to "cpp",
-        "h" to "cpp", "c" to "c",
-        "swift" to "swift", "java" to "java", "rb" to "ruby", "php" to "php", "rs" to "rust",
-        "json" to "json", "jsonc" to "jsonc",
+        "toml" to "toml",
+        "gd" to "gdscript",
+        "cpp" to "cpp", "cc" to "cpp", "cxx" to "cpp", "hpp" to "cpp", "hh" to "cpp", "hxx" to "cpp", "h" to "cpp",
+        "swift" to "swift",
+        "java" to "java",
+        "rb" to "ruby",
+        "php" to "php",
+        "rs" to "rust",
+        "yml" to "yaml", "yaml" to "yaml",
         "xml" to "xml", "xsd" to "xml", "xsl" to "xml", "svg" to "xml", "plist" to "xml",
-        "md" to "markdown", "markdown" to "markdown", "yml" to "yaml", "yaml" to "yaml",
+        "pro" to "qmake", "pri" to "qmake", "prf" to "qmake",
+        "gitignore" to "gitignore", "dockerignore" to "gitignore", "npmignore" to "gitignore",
+        // extras
+        "c" to "c",
+        "json" to "json", "jsonc" to "jsonc",
+        "md" to "markdown", "markdown" to "markdown",
         "html" to "html", "htm" to "html", "css" to "css",
         "sh" to "shellscript", "bash" to "shellscript", "zsh" to "shellscript",
         "gradle" to "groovy", "groovy" to "groovy",
@@ -55,10 +70,10 @@ object Fs {
         "python" to "Python", "kotlin" to "Kotlin", "typescript" to "TypeScript", "tsx" to "TSX",
         "javascript" to "JavaScript", "toml" to "TOML", "gdscript" to "GDScript", "cpp" to "C++",
         "c" to "C", "swift" to "Swift", "java" to "Java", "ruby" to "Ruby", "php" to "PHP",
-        "rust" to "Rust", "json" to "JSON", "jsonc" to "JSON", "xml" to "XML", "markdown" to "Markdown",
-        "yaml" to "YAML", "html" to "HTML", "css" to "CSS", "shellscript" to "Shell script",
-        "groovy" to "Groovy", "ini" to "Config", "sql" to "SQL", "csharp" to "C#", "go" to "Go",
-        "dart" to "Dart",
+        "rust" to "Rust", "yaml" to "YAML", "xml" to "XML", "qmake" to "Qt project",
+        "gitignore" to "Git ignore", "json" to "JSON", "jsonc" to "JSON", "markdown" to "Markdown",
+        "html" to "HTML", "css" to "CSS", "shellscript" to "Shell script", "groovy" to "Groovy",
+        "ini" to "Config", "sql" to "SQL", "csharp" to "C#", "go" to "Go", "dart" to "Dart",
     )
 
     /** Languages that have a logo bundled by tools/prepare.py. */
