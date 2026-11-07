@@ -212,7 +212,7 @@ class GitodeEditor(context: Context) : CodeEditor(context) {
         setSelectionRegion(l1, c1 + open.length, l2, endCol)
     }
 
-    private fun insertText(s: String, cursorBack: Int = 0) {
+    private fun insertAtCursor(s: String, cursorBack: Int = 0) {
         val l1 = cursor.leftLine
         val c1 = cursor.leftColumn
         text.beginBatchEdit()
@@ -241,7 +241,7 @@ class GitodeEditor(context: Context) : CodeEditor(context) {
             }
             setSelectionRegion(l1, c1 + unit.length, l2, c2 + unit.length)
         } else {
-            insertText(unit)
+            insertAtCursor(unit)
         }
     }
 
@@ -330,8 +330,8 @@ class GitodeEditor(context: Context) : CodeEditor(context) {
             key.tab -> insertIndent()
             key.close != null ->
                 if (cursor.isSelected) wrapSelection(key.text, key.close)
-                else insertText(key.text + key.close, cursorBack = key.close.length)
-            else -> insertText(key.text)
+                else insertAtCursor(key.text + key.close, cursorBack = key.close.length)
+            else -> insertAtCursor(key.text)
         }
     }
 }
