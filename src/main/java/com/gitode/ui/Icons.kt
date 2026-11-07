@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -210,15 +211,32 @@ fun folderGlyph(name: String): Ic? = when (name.lowercase()) {
     else -> null
 }
 
+/**
+ * Plain folders are drawn as an outline. Special folders (github, test, main, src, game, UI)
+ * are solid accent-coloured folders with a large glyph in white (or black if the accent were light).
+ */
 @Composable
-fun FolderIcon(name: String, size: Dp = 22.dp, tint: Color = G.c.dim, glyphColor: Color = G.c.accent) {
+fun FolderIcon(name: String, size: Dp = 28.dp, tint: Color = G.c.dim) {
     val glyph = folderGlyph(name)
+    val accent = G.c.accent
+    val onAccent = if (accent.luminance() > 0.5f) Color.Black else Color.White
     Canvas(Modifier.size(size)) {
         val s = this.size.width / 24f
-        drawGlyph(Ic.Folder, tint, s, 1.8f)
-        if (glyph != null) {
-            withTransform({ translate(7.7f * s, 9.6f * s); scale(0.36f, 0.36f, Offset.Zero) }) {
-                drawGlyph(glyph, glyphColor, s, 3.4f)
+        if (glyph == null) {
+            drawGlyph(Ic.Folder, tint, s, 1.8f)
+        } else {
+            val body = Path()
+            body.moveTo(2.5f * s, 4.5f * s)
+            body.lineTo(9.5f * s, 4.5f * s)
+            body.lineTo(11.5f * s, 7f * s)
+            body.lineTo(21.5f * s, 7f * s)
+            body.lineTo(21.5f * s, 20f * s)
+            body.lineTo(2.5f * s, 20f * s)
+            body.close()
+            drawPath(body, accent)
+            drawPath(body, accent, style = Stroke(width = 1.6f * s, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            withTransform({ translate(5.75f * s, 7.25f * s); scale(0.52f, 0.52f, Offset.Zero) }) {
+                drawGlyph(glyph, onAccent, s, 3.2f)
             }
         }
     }
