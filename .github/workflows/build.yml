@@ -1,0 +1,119 @@
+name: Build Gitode
+
+# Manual only: Actions tab -> "Build Gitode" -> Run workflow.
+# There is deliberately no push trigger, so uploading files one by one
+# never starts a half-finished build.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-gitode
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    name: Build APKs
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install asset tooling
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y libcairo2
+          python -m pip install --upgrade pip
+          python -m pip install pillow cairosvg
+
+      - name: Generate icons and fetch assets
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python tools/prepare.py
+
+      - name: Write Gradle properties
+        run: |
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          kotlin.code.style=official
+          EOF
+
+      - name: Create throwaway signing key
+        run: |
+          PASS="$(openssl rand -hex 16)"
+          echo "::add-mask::$PASS"
+          keytool -genkeypair \
+            -keystore "$RUNNER_TEMP/dev.jks" \
+            -alias gitode \
+            -keyalg RSA -keysize 2048 -validity 3650 \
+            -storepass "$PASS" -keypass "$PASS" \
+            -dname "CN=Gitode Dev, O=Gitode, C=US"
+          echo "GITODE_KS_PATH=$RUNNER_TEMP/dev.jks" >> "$GITHUB_ENV"
+          echo "GITODE_KS_PASS=$PASS" >> "$GITHUB_ENV"
+          echo "GITODE_KS_ALIAS=gitode" >> "$GITHUB_ENV"
+
+      - name: Build APKs
+        run: gradle --no-daemon --stacktrace assembleRelease
+
+      - name: Collect and verify APKs
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for f in build/outputs/apk/release/*.apk; do
+            base="$(basename "$f" .apk)"
+            abi="${base#*-}"
+            abi="${abi%-release}"
+            cp "$f" "dist/Gitode-${abi}.apk"
+          done
+          if [ ! -f dist/Gitode-universal.apk ]; then
+            echo "Universal APK missing. Build output:"
+            ls -R build/outputs/apk || true
+            exit 1
+          fi
+          {
+            echo "### Gitode APKs"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for abi in armeabi-v7a arm64-v8a x86 x86_64; do
+            if [ ! -f "dist/Gitode-${abi}.apk" ]; then
+              # The app has no native code, so Gradle may emit only the universal APK.
+              # The per-ABI files are then identical copies of it.
+              cp dist/Gitode-universal.apk "dist/Gitode-${abi}.apk"
+              echo "- ${abi}: copy of universal (no native code)" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+          APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n1)/apksigner"
+          for f in dist/*.apk; do
+            "$APKSIGNER" verify "$f"
+          done
+          ls -lh dist >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: Gitode-apks
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 30
