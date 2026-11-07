@@ -5,6 +5,7 @@ import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.view.inputmethod.InputMethodManager
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.keyframes
 import androidx.compose.foundation.background
@@ -49,7 +50,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -108,9 +108,22 @@ fun Txt(
 fun Modifier.screenBase(): Modifier =
     this.fillMaxSize().background(G.c.bg).statusBarsPadding().navigationBarsPadding()
 
-/** Clickable without a ripple (blank-area taps). */
+/**
+ * Clickable without a ripple. Used for "dead zones": a tap on empty space runs [onClick],
+ * while taps on buttons inside are handled by the buttons themselves.
+ */
 fun Modifier.noRippleClick(onClick: () -> Unit): Modifier = composed {
     clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick)
+}
+
+/** Hides the on-screen keyboard, whichever view (Compose field or the code editor) owns it. */
+fun hideKeyboard(view: android.view.View) {
+    try {
+        val imm = view.context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.hideSoftInputFromWindow(view.windowToken, 0)
+    } catch (e: Exception) {
+        // Nothing to hide.
+    }
 }
 
 fun vibrate(context: Context, ms: Long) {
@@ -126,27 +139,6 @@ fun vibrate(context: Context, ms: Long) {
         // No vibrator or vibration not allowed: the visual feedback is enough.
     }
 }
-
-/**
- * Soft accent glow behind a component, drawn as stacked translucent rounded shapes
- * (larger and fainter towards the outside), so it needs no blur or special graphics API.
- */
-fun Modifier.glow(color: Color, radius: Dp = 18.dp, corner: Dp = 14.dp, alpha: Float = 0.55f): Modifier =
-    this.drawBehind {
-        val steps = 8
-        val reach = radius.toPx()
-        val base = corner.toPx()
-        val layerAlpha = (alpha / steps) * 0.9f
-        for (i in steps downTo 1) {
-            val grow = reach * i / steps
-            drawRoundRect(
-                color = color.copy(alpha = layerAlpha),
-                topLeft = Offset(-grow, -grow),
-                size = Size(size.width + grow * 2f, size.height + grow * 2f),
-                cornerRadius = CornerRadius(base + grow),
-            )
-        }
-    }
 
 @Composable
 fun IconBtn(
@@ -165,6 +157,7 @@ fun IconBtn(
     }
 }
 
+/** The app's main button: a flat accent-coloured pill (no glow). */
 @Composable
 fun GlowButton(
     text: String,
@@ -177,7 +170,6 @@ fun GlowButton(
     val shape = RoundedCornerShape(14.dp)
     Row(
         modifier
-            .then(if (enabled) Modifier.glow(c.accent, 16.dp, 14.dp, 0.5f) else Modifier)
             .clip(shape)
             .background(if (enabled) c.accent else c.card)
             .clickable(enabled = enabled, onClick = onClick)
