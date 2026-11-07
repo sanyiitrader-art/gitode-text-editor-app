@@ -3,8 +3,8 @@
 
 1. Launcher icons generated from icon.png (adaptive icon, transparent background).
 2. TextMate grammars and themes (tm-grammars / tm-themes through jsDelivr),
-   plus three small self-contained grammars written here: XML, Qt project files
-   (qmake) and .gitignore.
+   plus small self-contained grammars written here: XML, plain text, Qt project
+   files (qmake) and .gitignore.
 3. Fonts (google/fonts repository).
 4. Language logos (devicon / simple-icons rasterised to PNG, plus a few drawn here).
 5. Theme preview screenshots copied from theme-previews/.
@@ -116,8 +116,7 @@ GRAMMAR_URL = "https://cdn.jsdelivr.net/npm/tm-grammars@1/grammars/{}.json"
 THEME_URL = "https://cdn.jsdelivr.net/npm/tm-themes@1/themes/{}.json"
 
 # Keys here are Gitode's language keys (they match Fs.languageOf in the app).
-# "xml" is NOT listed: it is a self-contained grammar written below, because
-# Ruby and PHP depend on it and the downloaded one did not load reliably.
+# "xml" and "text" are NOT listed: they are self-contained grammars written below.
 LANGS = [
     "python", "kotlin", "typescript", "tsx", "javascript", "toml", "gdscript",
     "cpp", "c", "swift", "java", "ruby", "php", "rust",
@@ -125,17 +124,25 @@ LANGS = [
     "shellscript", "groovy", "ini", "sql", "csharp", "go", "dart",
     "lua", "xsl",
     "powershell", "dockerfile", "makefile", "r", "julia", "matlab", "scala",
+    # newest languages
+    "graphql", "haskell", "elixir", "erlang", "perl", "asm", "zig", "nix",
+    "terraform", "vue", "svelte", "clojure",
+    # helper grammars that Vue, Svelte and others build on (optional)
+    "html-derivative", "vue-html", "vue-directives", "vue-interpolations",
+    "vue-sfc-style-variable-injection", "markdown-vue",
+    "scss", "sass", "less", "stylus", "pug", "jsx", "json5",
 ]
 
 # Some grammars are published under a different name; each is tried in order.
 SOURCE_NAMES = {
     "dockerfile": ["docker", "dockerfile"],
     "makefile": ["make", "makefile"],
+    "asm": ["asm"],
 }
 
 REQUIRED_LANGS = {
     "python", "kotlin", "typescript", "tsx", "javascript", "toml", "gdscript",
-    "cpp", "swift", "java", "ruby", "php", "rust", "yaml",
+    "cpp", "swift", "java", "ruby", "php", "rust", "yaml", "markdown",
 }
 THEMES = [
     "dark-plus", "one-dark-pro", "dracula", "monokai", "nord", "github-dark",
@@ -151,6 +158,9 @@ LANG_CONFIG = {
         {"open": "(", "close": ")"},
     ],
 }
+
+# Plain text (.txt): a grammar with no rules, so nothing is coloured.
+PLAIN_GRAMMAR = {"name": "text", "scopeName": "text.plain", "patterns": []}
 
 XML_GRAMMAR = {
     "name": "xml",
@@ -296,7 +306,12 @@ GITIGNORE_GRAMMAR = {
     ],
 }
 
-CUSTOM_GRAMMARS = {"xml": XML_GRAMMAR, "qmake": QMAKE_GRAMMAR, "gitignore": GITIGNORE_GRAMMAR}
+CUSTOM_GRAMMARS = {
+    "text": PLAIN_GRAMMAR,
+    "xml": XML_GRAMMAR,
+    "qmake": QMAKE_GRAMMAR,
+    "gitignore": GITIGNORE_GRAMMAR,
+}
 
 
 def external_scope(include, own):
@@ -490,7 +505,6 @@ LOGOS = {
     "qmake": ("simple", "qt", "#41CD52"),          # Qt project files (.pro)
     "gitignore": ("simple", "git", "#F05032"),
     "xml": ("local", None, None),                  # drawn here: a "</>" mark
-    # ---- more languages
     "csharp": ("devicon", "csharp", None),
     "go": ("devicon", "go", None),
     "dart": ("devicon", "dart", None),
@@ -507,6 +521,22 @@ LOGOS = {
     "julia": ("devicon", "julia", None),
     "matlab": ("devicon", "matlab", None),
     "scala": ("devicon", "scala", None),
+    # ---- newest additions
+    "markdown": ("devicon", "markdown", None),
+    "txt": ("local", None, None),                  # drawn here: a text document
+    "c": ("devicon", "c", None),
+    "graphql": ("simple", "graphql", "#E10098"),
+    "haskell": ("devicon", "haskell", None),
+    "elixir": ("devicon", "elixir", None),
+    "erlang": ("devicon", "erlang", None),
+    "perl": ("devicon", "perl", None),
+    "asm": ("local", None, None),                  # drawn here: a chip
+    "zig": ("simple", "zig", "#F7A41D"),
+    "nix": ("simple", "nixos", "#5277C3"),
+    "terraform": ("simple", "terraform", "#844FBA"),
+    "vue": ("devicon", "vuejs", None),
+    "svelte": ("devicon", "svelte", None),
+    "clojure": ("devicon", "clojure", None),
 }
 
 _SVG_HEAD = (
@@ -538,6 +568,17 @@ LOCAL_SVGS = {
         '<path d="M12 2.8v2M12 19.2v2M2.8 12h2M19.2 12h2M5.5 5.5l1.4 1.4M17.1 17.1l1.4 1.4'
         'M5.5 18.5l1.4-1.4M17.1 6.9l1.4-1.4"/></svg>'
     ),
+    "txt": (
+        _SVG_HEAD.format(c="#9AA5B1", w="1.8")
+        + '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>'
+        '<line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="15.5" x2="15" y2="15.5"/>'
+        '<line x1="9" y1="19" x2="12.5" y2="19"/></svg>'
+    ),
+    "asm": (
+        _SVG_HEAD.format(c="#6C8EBF", w="1.9")
+        + '<rect x="7" y="7" width="10" height="10" rx="1.5"/><rect x="10" y="10" width="4" height="4"/>'
+        '<path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/></svg>'
+    ),
 }
 
 # If a logo download fails, these still get a simple labelled badge instead of a generic icon.
@@ -558,6 +599,19 @@ BADGES = {
     "julia": ("JL", "#9558B2"),
     "matlab": ("ML", "#E16737"),
     "scala": ("SCA", "#DC322F"),
+    "markdown": ("MD", "#519ABA"),
+    "c": ("C", "#5C6BC0"),
+    "graphql": ("GQL", "#E10098"),
+    "haskell": ("HS", "#5E5086"),
+    "elixir": ("EX", "#6E4A7E"),
+    "erlang": ("ERL", "#A90533"),
+    "perl": ("PL", "#39457E"),
+    "zig": ("ZIG", "#F7A41D"),
+    "nix": ("NIX", "#5277C3"),
+    "terraform": ("TF", "#844FBA"),
+    "vue": ("VUE", "#42B883"),
+    "svelte": ("SV", "#FF3E00"),
+    "clojure": ("CLJ", "#5881D8"),
 }
 
 
