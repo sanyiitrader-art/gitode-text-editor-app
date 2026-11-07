@@ -40,7 +40,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -268,15 +267,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Full-screen layer that covers the editor underneath. The empty click handler only stops
+     * touches reaching the screen below. It never consumes touch movement, which is what made
+     * Settings ignore most taps before (a parent that consumes every pointer event cancels the
+     * taps of the buttons inside it).
+     */
     @Composable
     private fun Overlay(content: @Composable () -> Unit) {
-        Box(
-            Modifier.fillMaxSize().background(G.c.bg).pointerInput(Unit) {
-                awaitPointerEventScope {
-                    while (true) awaitPointerEvent().changes.forEach { it.consume() }
-                }
-            },
-        ) { content() }
+        Box(Modifier.fillMaxSize().background(G.c.bg).noRippleClick { }) { content() }
     }
 
     @Composable
