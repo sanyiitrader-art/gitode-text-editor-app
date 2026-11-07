@@ -35,9 +35,10 @@ object Fs {
     /**
      * File extension -> language key (also the key of the TextMate grammar).
      * For ".gitignore" the extension is "gitignore", because the name starts with the dot.
+     * Files without an extension (Dockerfile, Makefile) are recognised by name in [languageOf].
      */
     private val LANG_BY_EXT = mapOf(
-        // required languages
+        // original languages
         "py" to "python", "pyw" to "python",
         "kt" to "kotlin", "kts" to "kotlin",
         "ts" to "typescript", "mts" to "typescript", "cts" to "typescript",
@@ -55,15 +56,28 @@ object Fs {
         "xml" to "xml", "xsd" to "xml", "xsl" to "xml", "svg" to "xml", "plist" to "xml",
         "pro" to "qmake", "pri" to "qmake", "prf" to "qmake",
         "gitignore" to "gitignore", "dockerignore" to "gitignore", "npmignore" to "gitignore",
+        // more languages
+        "cs" to "csharp", "csx" to "csharp",
+        "go" to "go",
+        "dart" to "dart",
+        "lua" to "lua",
+        "sql" to "sql",
+        "html" to "html", "htm" to "html", "xhtml" to "html",
+        "css" to "css",
+        "json" to "json", "jsonc" to "jsonc",
+        "sh" to "shellscript", "bash" to "shellscript", "zsh" to "shellscript",
+        "bashrc" to "shellscript", "zshrc" to "shellscript",
+        "ps1" to "powershell", "psm1" to "powershell", "psd1" to "powershell",
+        "mk" to "makefile", "mak" to "makefile",
+        "r" to "r",
+        "jl" to "julia",
+        "m" to "matlab",
+        "scala" to "scala", "sc" to "scala", "sbt" to "scala",
         // extras
         "c" to "c",
-        "json" to "json", "jsonc" to "jsonc",
         "md" to "markdown", "markdown" to "markdown",
-        "html" to "html", "htm" to "html", "css" to "css",
-        "sh" to "shellscript", "bash" to "shellscript", "zsh" to "shellscript",
         "gradle" to "groovy", "groovy" to "groovy",
         "ini" to "ini", "cfg" to "ini", "properties" to "ini",
-        "sql" to "sql", "cs" to "csharp", "go" to "go", "dart" to "dart",
     )
 
     private val LANG_NAMES = mapOf(
@@ -72,27 +86,42 @@ object Fs {
         "c" to "C", "swift" to "Swift", "java" to "Java", "ruby" to "Ruby", "php" to "PHP",
         "rust" to "Rust", "yaml" to "YAML", "xml" to "XML", "qmake" to "Qt project",
         "gitignore" to "Git ignore", "json" to "JSON", "jsonc" to "JSON", "markdown" to "Markdown",
-        "html" to "HTML", "css" to "CSS", "shellscript" to "Shell script", "groovy" to "Groovy",
+        "html" to "HTML", "css" to "CSS", "shellscript" to "Bash", "groovy" to "Groovy",
         "ini" to "Config", "sql" to "SQL", "csharp" to "C#", "go" to "Go", "dart" to "Dart",
+        "lua" to "Lua", "powershell" to "PowerShell", "dockerfile" to "Dockerfile",
+        "makefile" to "Makefile", "r" to "R", "julia" to "Julia", "matlab" to "MATLAB",
+        "scala" to "Scala",
     )
 
     /** Languages that have a logo bundled by tools/prepare.py (the key is also the logo's file name). */
     private val LOGO_KEYS = setOf(
         "python", "kotlin", "typescript", "javascript", "cpp", "swift", "java", "ruby", "php",
         "rust", "toml", "gdscript", "tsx", "yaml", "xml", "qmake", "gitignore",
+        "csharp", "go", "dart", "lua", "sql", "html", "css", "json", "shellscript", "powershell",
+        "dockerfile", "makefile", "r", "julia", "matlab", "scala",
     )
 
     fun ext(name: String): String = name.substringAfterLast('.', "").lowercase()
 
     /** TextMate language key for a file name, or null for plain text. */
-    fun languageOf(name: String): String? = LANG_BY_EXT[ext(name)]
+    fun languageOf(name: String): String? {
+        val lower = name.lowercase()
+        // files recognised by their name rather than an extension
+        if (lower == "dockerfile" || lower.startsWith("dockerfile.") || lower.endsWith(".dockerfile")) return "dockerfile"
+        if (lower == "makefile" || lower == "gnumakefile" || lower == "bsdmakefile") return "makefile"
+        return LANG_BY_EXT[ext(name)]
+    }
 
     /** Key of the bundled logo for a file name, or null if it has none. */
     fun iconKeyOf(name: String): String? {
         val lang = languageOf(name) ?: return null
         // .dockerignore and .npmignore share the ignore-file highlighting but not Git's logo.
         if (lang == "gitignore" && ext(name) != "gitignore") return null
-        val key = if (lang == "c") "cpp" else lang
+        val key = when (lang) {
+            "c" -> "cpp"
+            "jsonc" -> "json"
+            else -> lang
+        }
         return if (key in LOGO_KEYS) key else null
     }
 
