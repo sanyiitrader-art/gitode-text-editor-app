@@ -2,7 +2,8 @@
 """Gitode build-time asset preparation. CI runs this before Gradle.
 
 1. Launcher icons generated from icon.png (adaptive icon, transparent background).
-2. TextMate grammars and themes (tm-grammars / tm-themes through jsDelivr).
+2. TextMate grammars and themes (tm-grammars / tm-themes through jsDelivr),
+   plus two small grammars written here: Qt project files (qmake) and .gitignore.
 3. Fonts (google/fonts repository).
 4. Language logos (devicon / simple-icons rasterised to PNG).
 5. Theme preview screenshots copied from theme-previews/.
@@ -11,6 +12,7 @@ Everything generated lives in src/main/assets and src/main/res/mipmap-*,
 both git-ignored. Required items fail the build; optional ones only warn.
 """
 import json
+import os
 import re
 import shutil
 import sys
@@ -120,7 +122,7 @@ LANGS = [
 ]
 REQUIRED_LANGS = {
     "python", "kotlin", "typescript", "tsx", "javascript", "toml", "gdscript",
-    "cpp", "swift", "java", "ruby", "php", "rust",
+    "cpp", "swift", "java", "ruby", "php", "rust", "yaml", "xml",
 }
 THEMES = [
     "dark-plus", "one-dark-pro", "dracula", "monokai", "nord", "github-dark",
@@ -137,6 +139,90 @@ LANG_CONFIG = {
     ],
 }
 
+# Qt project files (.pro, .pri, .prf) are written in qmake's language.
+QMAKE_GRAMMAR = {
+    "name": "qmake",
+    "scopeName": "source.qmake",
+    "patterns": [
+        {"include": "#comment"},
+        {"include": "#string"},
+        {"include": "#variable-ref"},
+        {"include": "#continuation"},
+        {"include": "#assignment-target"},
+        {"include": "#operator"},
+        {"include": "#keyword"},
+        {"include": "#function"},
+        {"include": "#platform"},
+        {"include": "#number"},
+    ],
+    "repository": {
+        "comment": {"name": "comment.line.number-sign.qmake", "match": r"#.*$"},
+        "string": {
+            "name": "string.quoted.double.qmake",
+            "begin": r'"',
+            "end": r'"',
+            "patterns": [
+                {"name": "constant.character.escape.qmake", "match": r"\\."},
+                {"include": "#variable-ref"},
+            ],
+        },
+        "variable-ref": {
+            "name": "variable.other.readwrite.qmake",
+            "match": r"\$\$(?:\{[^}]*\}|\[[^\]]*\]|[A-Za-z_][A-Za-z0-9_.]*)|\$\([^)]*\)",
+        },
+        "continuation": {
+            "name": "constant.character.escape.continuation.qmake",
+            "match": r"\\\s*$",
+        },
+        "assignment-target": {
+            "match": r"^\s*([A-Za-z_][A-Za-z0-9_.]*)(?=\s*(?:\+=|-=|\*=|~=|=))",
+            "captures": {"1": {"name": "variable.other.qmake"}},
+        },
+        "operator": {"name": "keyword.operator.assignment.qmake", "match": r"\+=|-=|\*=|~=|="},
+        "keyword": {
+            "name": "keyword.control.qmake",
+            "match": r"\b(?:else|for|if|return|defineTest|defineReplace|include|load|requires)\b",
+        },
+        "function": {"name": "support.function.qmake", "match": r"\b[A-Za-z_][A-Za-z0-9_]*(?=\()"},
+        "platform": {
+            "name": "constant.language.qmake",
+            "match": r"\b(?:unix|win32|win64|macx|linux|android|ios|mac|msvc|gcc|debug|release|debug_and_release)\b",
+        },
+        "number": {"name": "constant.numeric.qmake", "match": r"\b\d+\b"},
+    },
+}
+
+GITIGNORE_GRAMMAR = {
+    "name": "gitignore",
+    "scopeName": "source.gitignore",
+    "patterns": [
+        {"name": "comment.line.number-sign.gitignore", "match": r"^\s*#.*$"},
+        {"name": "keyword.operator.negation.gitignore", "match": r"^\s*!"},
+        {"name": "constant.character.escape.gitignore", "match": r"\\."},
+        {"name": "keyword.operator.wildcard.gitignore", "match": r"\*\*|\*|\?|\[[^\]\n]*\]"},
+        {"name": "entity.name.section.gitignore", "match": r"/(?=\s*$)"},
+        {"name": "punctuation.separator.gitignore", "match": r"/"},
+        {"name": "string.unquoted.path.gitignore", "match": r"[^\s*?\[\]!/\\#]+"},
+    ],
+}
+
+CUSTOM_GRAMMARS = {"qmake": QMAKE_GRAMMAR, "gitignore": GITIGNORE_GRAMMAR}
+
+
+def write_grammar(tm, name, data, scope):
+    d = tm / name
+    (d / "syntaxes").mkdir(parents=True, exist_ok=True)
+    grammar_rel = f"textmate/{name}/syntaxes/{name}.tmLanguage.json"
+    config_rel = f"textmate/{name}/language-configuration.json"
+    (d / "syntaxes" / f"{name}.tmLanguage.json").write_bytes(data)
+    (d / "language-configuration.json").write_text(json.dumps(LANG_CONFIG), encoding="utf-8")
+    return {
+        "name": name,
+        "scopeName": scope,
+        "grammar": grammar_rel,
+        "languageConfiguration": config_rel,
+    }
+
 
 def fetch_textmate():
     tm = ASSETS / "textmate"
@@ -151,18 +237,12 @@ def fetch_textmate():
         except Exception as e:  # noqa: BLE001
             (fail if lang in REQUIRED_LANGS else warn)(f"grammar {lang}: {e}")
             continue
-        d = tm / lang
-        (d / "syntaxes").mkdir(parents=True, exist_ok=True)
-        grammar_rel = f"textmate/{lang}/syntaxes/{lang}.tmLanguage.json"
-        config_rel = f"textmate/{lang}/language-configuration.json"
-        (d / "syntaxes" / f"{lang}.tmLanguage.json").write_bytes(data)
-        (d / "language-configuration.json").write_text(json.dumps(LANG_CONFIG), encoding="utf-8")
-        entries.append({
-            "name": lang,
-            "scopeName": scope,
-            "grammar": grammar_rel,
-            "languageConfiguration": config_rel,
-        })
+        entries.append(write_grammar(tm, lang, data, scope))
+
+    for name, grammar in CUSTOM_GRAMMARS.items():
+        data = json.dumps(grammar, indent=1).encode("utf-8")
+        entries.append(write_grammar(tm, name, data, grammar["scopeName"]))
+
     (tm / "languages.json").write_text(json.dumps({"languages": entries}, indent=1), encoding="utf-8")
 
     for theme in THEMES:
@@ -212,8 +292,6 @@ def fetch_fonts():
     out = ASSETS / "fonts"
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True, exist_ok=True)
-    token = None
-    import os
     token = os.environ.get("GITHUB_TOKEN")
     headers = {"Accept": "application/vnd.github+json"}
     if token:
