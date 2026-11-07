@@ -2,6 +2,7 @@ package com.gitode.ui
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
@@ -14,6 +15,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -27,6 +29,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -35,8 +38,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -54,22 +57,25 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -88,7 +94,7 @@ fun EditorScreen(
 ) {
     val c = G.c
     val scope = rememberCoroutineScope()
-    val keyboard = LocalSoftwareKeyboardController.current
+    val view = LocalView.current
     val density = LocalDensity.current
 
     var p by remember { mutableFloatStateOf(0f) }
@@ -100,13 +106,22 @@ fun EditorScreen(
     var showRepo by remember { mutableStateOf(false) }
     var editor by remember { mutableStateOf<GitodeEditor?>(null) }
 
+    fun closeKeyboard() {
+        editor?.dismissKeyboard()
+        hideKeyboard(view)
+    }
+
+    // Tapping anywhere that has no function (empty top-bar space, the name sheet, empty screen) hides the keyboard.
+    val dead: () -> Unit = { closeKeyboard() }
+
     fun settle(target: Float) {
         anim?.cancel()
         if (target == 0f) vm.cancelInline()
         anim = scope.launch { animate(p, target, animationSpec = tween(220)) { v, _ -> p = v } }
     }
 
-    LaunchedEffect(p > 0f) { if (p > 0f) keyboard?.hide() }
+    // The keyboard goes away as soon as the drawer starts to open and stays away until it is needed again.
+    LaunchedEffect(p > 0f) { if (p > 0f) closeKeyboard() }
     BackHandler(enabled = p > 0f) { settle(0f) }
 
     val active = vm.active
@@ -117,7 +132,8 @@ fun EditorScreen(
         Column(Modifier.screenBase().imePadding()) {
             // ---- fixed top bar
             Row(
-                Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 8.dp),
+                Modifier.fillMaxWidth().background(c.surface).height(64.dp).noRippleClick(dead)
+                    .padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconBtn(Ic.Menu, { settle(1f) })
@@ -143,37 +159,26 @@ fun EditorScreen(
                     )
                 }
             }
+            Box(Modifier.fillMaxWidth().height(1.dp).background(c.outline))
 
-            // ---- file name sheet
+            // ---- thin file-name sheet: just the name (and the unsaved dot), no box around it
             val sheetName = active?.file?.name ?: image?.name
             if (sheetName != null) {
                 Row(
-                    Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                        .clip(RoundedCornerShape(12.dp)).background(c.card)
-                        .border(1.dp, c.outline, RoundedCornerShape(12.dp))
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    Modifier.fillMaxWidth().background(c.card).noRippleClick(dead)
+                        .padding(horizontal = 16.dp, vertical = 3.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Txt(sheetName, size = 14.sp, weight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    Txt(
+                        sheetName, Modifier.weight(1f, fill = false),
+                        size = 12.sp, weight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
                     if (active?.dirty == true) {
                         Spacer(Modifier.width(8.dp))
-                        Box(Modifier.size(8.dp).clip(CircleShape).background(c.accent))
+                        Box(Modifier.size(7.dp).clip(CircleShape).background(c.accent))
                     }
                 }
-            }
-
-            // ---- duplicate-content reminder (never blocks anything)
-            vm.duplicateNotice?.let { msg ->
-                Row(
-                    Modifier.padding(horizontal = 16.dp, vertical = 6.dp).fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp)).background(c.accent.copy(alpha = 0.14f))
-                        .border(1.dp, c.accent.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
-                        .padding(start = 14.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Txt(msg, Modifier.weight(1f), size = 13.sp, lineHeight = 18.sp)
-                    IconBtn(Ic.Close, { vm.dismissDuplicate() }, size = 36.dp)
-                }
+                Box(Modifier.fillMaxWidth().height(1.dp).background(c.outline))
             }
 
             // ---- main surface
@@ -183,25 +188,68 @@ fun EditorScreen(
                         vm = vm, buffer = active, onEditor = { editor = it }, modifier = Modifier.fillMaxSize(),
                     )
                     image != null -> ImageViewer(image)
-                    vm.root == null -> EmptyState(onPickFolder, onPickFile)
-                    else -> FolderContents(vm, onOpenDrawer = { settle(1f) })
+                    vm.root == null -> EmptyState(onPickFolder, onPickFile, dead)
+                    else -> FolderContents(vm, onOpenDrawer = { settle(1f) }, onBlank = dead)
                 }
             }
 
             if (active != null) SmartKeysBar(editor)
         }
 
+        // ---- duplicate-content reminder: a layer at the very top of the screen (never blocks anything)
+        vm.duplicateNotice?.let { msg ->
+            LaunchedEffect(msg) {
+                delay(7000)
+                if (vm.duplicateNotice == msg) vm.dismissDuplicate()
+            }
+            Box(
+                Modifier.align(Alignment.TopCenter).statusBarsPadding()
+                    .padding(top = 8.dp, start = 12.dp, end = 12.dp),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(c.card)
+                        .border(1.dp, c.accent.copy(alpha = 0.6f), RoundedCornerShape(14.dp))
+                        .padding(start = 14.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Txt(msg, Modifier.weight(1f), size = 13.sp, lineHeight = 18.sp)
+                    IconBtn(Ic.Close, { vm.dismissDuplicate() }, size = 36.dp)
+                }
+            }
+        }
+
         // ---- drawer
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val panelWidth = maxWidth * 0.95f
             val widthPx = with(density) { panelWidth.toPx() }
+            val exclusionLen = with(density) { 200.dp.roundToPx() }
             val dragState = rememberDraggableState { d ->
                 anim?.cancel()
                 p = (p + d / widthPx).coerceIn(0f, 1f)
             }
-            val onStop: suspend kotlinx.coroutines.CoroutineScope.(Float) -> Unit = { v ->
+            val onStop: suspend CoroutineScope.(Float) -> Unit = { v ->
                 settle(if (v > 700f) 1f else if (v < -700f) 0f else if (p > 0.5f) 1f else 0f)
             }
+
+            // Left-edge strip. It is ALWAYS composed, so a drag that starts on it keeps going while
+            // the drawer appears (the old version removed it mid-drag, which cancelled the gesture).
+            // It also asks Android not to treat swipes here as the system Back gesture.
+            Box(
+                Modifier.align(Alignment.TopStart).statusBarsPadding().padding(top = 100.dp)
+                    .height(320.dp).width(28.dp)
+                    .onGloballyPositioned { co ->
+                        if (Build.VERSION.SDK_INT >= 29) {
+                            val pos = co.positionInWindow()
+                            val h = co.size.height
+                            val len = minOf(h, exclusionLen)
+                            val top = (pos.y + (h - len) / 2f).toInt()
+                            view.systemGestureExclusionRects =
+                                listOf(android.graphics.Rect(0, top, co.size.width, top + len))
+                        }
+                    }
+                    .draggable(dragState, Orientation.Horizontal, onDragStopped = onStop),
+            )
+
             if (p > 0f) {
                 Box(
                     Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f * p))
@@ -219,12 +267,6 @@ fun EditorScreen(
                         onSettings = { settle(0f); onSettings() },
                     )
                 }
-            } else {
-                // invisible strip on the extreme left edge: swipe right to open the drawer
-                Box(
-                    Modifier.fillMaxHeight().width(16.dp)
-                        .draggable(dragState, Orientation.Horizontal, onDragStopped = onStop),
-                )
             }
         }
     }
@@ -272,7 +314,7 @@ fun EditorScreen(
 private fun CenterButton(text: String, onClick: () -> Unit) {
     val c = G.c
     Box(
-        Modifier.glow(c.accent, 12.dp, 20.dp, 0.4f).clip(RoundedCornerShape(20.dp)).background(c.accent)
+        Modifier.clip(RoundedCornerShape(20.dp)).background(c.accent)
             .clickable(onClick = onClick).padding(horizontal = 18.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -339,11 +381,11 @@ private fun EditorMenu(
 // ---------------------------------------------------------------- main surface states
 
 @Composable
-private fun EmptyState(onPickFolder: () -> Unit, onPickFile: () -> Unit) {
+private fun EmptyState(onPickFolder: () -> Unit, onPickFile: () -> Unit, onBlank: () -> Unit) {
     Column(
-        Modifier.fillMaxSize().padding(32.dp),
+        Modifier.fillMaxSize().noRippleClick(onBlank).padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+        verticalArrangement = Arrangement.Center,
     ) {
         GlowButton("Select Folder", onPickFolder, Modifier.fillMaxWidth(0.8f), icon = Ic.Folder)
         Spacer(Modifier.height(28.dp))
@@ -352,21 +394,25 @@ private fun EmptyState(onPickFolder: () -> Unit, onPickFile: () -> Unit) {
 }
 
 @Composable
-private fun FolderContents(vm: MainViewModel, onOpenDrawer: () -> Unit) {
+private fun FolderContents(vm: MainViewModel, onOpenDrawer: () -> Unit, onBlank: () -> Unit) {
     val c = G.c
     val root = vm.root ?: return
     val items = vm.children(root)
     if (items.isEmpty()) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize().noRippleClick(onBlank), contentAlignment = Alignment.Center) {
             Txt("This folder is empty", color = c.dim, size = 16.sp)
         }
         return
     }
-    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+    LazyColumn(
+        Modifier.fillMaxSize().noRippleClick(onBlank).padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         item { Spacer(Modifier.height(8.dp)) }
         items(items, key = { it.path }) { f ->
             Row(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(c.card)
+                    .border(1.dp, c.outline, RoundedCornerShape(14.dp))
                     .clickable { if (f.isDirectory) { vm.tapFolder(f); onOpenDrawer() } else vm.openFile(f) }
                     .padding(horizontal = 16.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
