@@ -32,6 +32,9 @@ import kotlin.math.sin
 enum class Ic {
     Menu, More, Close, Back, Chevron, Folder, File, Image, Plus, Search, Trash, TrashX, Check, Copy,
     Settings, Code, Contrast, Hammer, GitBranch, Flask, Braces, Gamepad, Layout, Star,
+    // glyphs for special folders
+    Cube, Tray, Book, Library, Sliders, Grid, Terminal, Database, Plug, Layers, TypeA, Note,
+    Film, Globe, Android, Apple, Monitor, Archive,
 }
 
 @Composable
@@ -164,6 +167,107 @@ fun DrawScope.drawGlyph(ic: Ic, color: Color, s: Float, sw: Float) {
             p.close()
             drawPath(p, color, style = stroke)
         }
+
+        // ---- special-folder glyphs
+        Ic.Cube -> { // assets
+            poly(12f, 3f, 20.5f, 7.8f, 20.5f, 16.2f, 12f, 21f, 3.5f, 16.2f, 3.5f, 7.8f, close = true)
+            poly(3.5f, 7.8f, 12f, 12.6f, 20.5f, 7.8f)
+            line(12f, 12.6f, 12f, 21f)
+        }
+        Ic.Tray -> { // dist
+            line(12f, 15f, 12f, 4f)
+            poly(7.5f, 8.5f, 12f, 4f, 16.5f, 8.5f)
+            poly(4f, 14.5f, 4f, 20f, 20f, 20f, 20f, 14.5f)
+        }
+        Ic.Book -> { // docs
+            poly(3.5f, 5.5f, 11.5f, 7.2f, 11.5f, 19.5f, 3.5f, 17.8f, close = true)
+            poly(20.5f, 5.5f, 12.5f, 7.2f, 12.5f, 19.5f, 20.5f, 17.8f, close = true)
+        }
+        Ic.Library -> { // lib
+            box(4f, 4.5f, 8.5f, 19.5f, 1f)
+            box(10f, 4.5f, 14.5f, 19.5f, 1f)
+            poly(16f, 6.5f, 19.8f, 5.5f, 21.5f, 18.3f, 17.7f, 19.3f, close = true)
+        }
+        Ic.Sliders -> { // config
+            line(4f, 6f, 7f, 6f); line(11f, 6f, 20f, 6f); ring(9f, 6f, 2f)
+            line(4f, 12f, 13f, 12f); line(17f, 12f, 20f, 12f); ring(15f, 12f, 2f)
+            line(4f, 18f, 6f, 18f); line(10f, 18f, 20f, 18f); ring(8f, 18f, 2f)
+        }
+        Ic.Grid -> { // components
+            box(4f, 4f, 10.5f, 10.5f, 1.2f); box(13.5f, 4f, 20f, 10.5f, 1.2f)
+            box(4f, 13.5f, 10.5f, 20f, 1.2f); box(13.5f, 13.5f, 20f, 20f, 1.2f)
+        }
+        Ic.Terminal -> { // scripts
+            poly(5f, 7.5f, 10.5f, 12f, 5f, 16.5f)
+            line(12.5f, 17f, 19.5f, 17f)
+        }
+        Ic.Database -> { // data
+            drawOval(color, Offset(5f * s, 3.5f * s), Size(14f * s, 5.5f * s), style = stroke)
+            line(5f, 6.3f, 5f, 17.7f); line(19f, 6.3f, 19f, 17.7f)
+            drawArc(color, 0f, 180f, false, Offset(5f * s, 9.2f * s), Size(14f * s, 5.6f * s), style = stroke)
+            drawArc(color, 0f, 180f, false, Offset(5f * s, 14.9f * s), Size(14f * s, 5.6f * s), style = stroke)
+        }
+        Ic.Plug -> { // plugins
+            line(9.5f, 3.5f, 9.5f, 8f); line(14.5f, 3.5f, 14.5f, 8f)
+            box(6.5f, 8f, 17.5f, 14.5f, 2.2f)
+            line(12f, 14.5f, 12f, 20.5f)
+        }
+        Ic.Layers -> { // resources
+            poly(12f, 3.5f, 21f, 8.3f, 12f, 13.1f, 3f, 8.3f, close = true)
+            poly(3f, 12.3f, 12f, 17.1f, 21f, 12.3f)
+            poly(3f, 16.2f, 12f, 21f, 21f, 16.2f)
+        }
+        Ic.TypeA -> { // fonts
+            poly(5.5f, 20f, 12f, 4.5f, 18.5f, 20f)
+            line(8f, 14.5f, 16f, 14.5f)
+        }
+        Ic.Note -> { // audio
+            ring(7.5f, 17.5f, 2.5f); ring(15.5f, 15.5f, 2.5f)
+            line(10f, 17.5f, 10f, 6.5f); line(18f, 15.5f, 18f, 4.5f)
+            line(10f, 6.5f, 18f, 4.5f)
+        }
+        Ic.Film -> { // video
+            box(3f, 5.5f, 21f, 18.5f, 2.5f)
+            poly(10f, 9.2f, 15.5f, 12f, 10f, 14.8f, close = true)
+        }
+        Ic.Globe -> { // public
+            ring(12f, 12f, 8.5f)
+            line(3.5f, 12f, 20.5f, 12f)
+            drawOval(color, Offset(8.3f * s, 3.5f * s), Size(7.4f * s, 17f * s), style = stroke)
+        }
+        Ic.Android -> { // android
+            drawArc(color, 180f, 180f, false, Offset(5.5f * s, 6.5f * s), Size(13f * s, 13f * s), style = stroke)
+            line(5.5f, 13f, 18.5f, 13f)
+            line(8.2f, 6.2f, 9.6f, 8.4f); line(15.8f, 6.2f, 14.4f, 8.4f)
+            dot(9.6f, 10.2f, 0.95f); dot(14.4f, 10.2f, 0.95f)
+            box(6f, 14.8f, 18f, 20.5f, 1.8f)
+        }
+        Ic.Apple -> { // ios
+            val a = Path()
+            a.moveTo(12f * s, 8.3f * s)
+            a.cubicTo(10.4f * s, 6.8f * s, 5.8f * s, 7.4f * s, 5.8f * s, 12.6f * s)
+            a.cubicTo(5.8f * s, 16.8f * s, 8.4f * s, 20.8f * s, 10.5f * s, 20.8f * s)
+            a.cubicTo(11.5f * s, 20.8f * s, 11.6f * s, 20.2f * s, 12f * s, 20.2f * s)
+            a.cubicTo(12.4f * s, 20.2f * s, 12.5f * s, 20.8f * s, 13.5f * s, 20.8f * s)
+            a.cubicTo(15.6f * s, 20.8f * s, 18.2f * s, 16.8f * s, 18.2f * s, 12.6f * s)
+            a.cubicTo(18.2f * s, 7.4f * s, 13.6f * s, 6.8f * s, 12f * s, 8.3f * s)
+            a.close()
+            drawPath(a, color, style = stroke)
+            val leaf = Path()
+            leaf.moveTo(12f * s, 7.6f * s)
+            leaf.cubicTo(12f * s, 5.4f * s, 13.2f * s, 3.9f * s, 15.2f * s, 3.5f * s)
+            drawPath(leaf, color, style = stroke)
+        }
+        Ic.Monitor -> { // web
+            box(3f, 4f, 21f, 16f, 2f)
+            line(8f, 20f, 16f, 20f)
+            line(12f, 16f, 12f, 20f)
+        }
+        Ic.Archive -> { // vendor
+            box(3.5f, 4f, 20.5f, 9f, 1.5f)
+            poly(5f, 9f, 5f, 19.5f, 19f, 19.5f, 19f, 9f)
+            line(10f, 13f, 14f, 13f)
+        }
     }
 }
 
@@ -200,7 +304,10 @@ fun FileIcon(name: String, size: Dp = 22.dp, tint: Color = G.c.dim) {
     }
 }
 
-/** Special glyph for folders named github, test, main, src, game or UI. */
+/**
+ * The glyph that says what a special folder is for. Every folder name has its own glyph.
+ * (".github" and "tests" are the same folders as "github" and "test", so they share theirs.)
+ */
 fun folderGlyph(name: String): Ic? = when (name.lowercase()) {
     "github", ".github" -> Ic.GitBranch
     "test", "tests" -> Ic.Flask
@@ -208,12 +315,32 @@ fun folderGlyph(name: String): Ic? = when (name.lowercase()) {
     "src" -> Ic.Braces
     "game" -> Ic.Gamepad
     "ui" -> Ic.Layout
+    "assets" -> Ic.Cube
+    "build" -> Ic.Hammer
+    "dist" -> Ic.Tray
+    "docs" -> Ic.Book
+    "lib" -> Ic.Library
+    "config" -> Ic.Sliders
+    "components" -> Ic.Grid
+    "scripts" -> Ic.Terminal
+    "data" -> Ic.Database
+    "plugins" -> Ic.Plug
+    "resources" -> Ic.Layers
+    "fonts" -> Ic.TypeA
+    "images" -> Ic.Image
+    "audio" -> Ic.Note
+    "video" -> Ic.Film
+    "public" -> Ic.Globe
+    "android" -> Ic.Android
+    "ios" -> Ic.Apple
+    "web" -> Ic.Monitor
+    "vendor" -> Ic.Archive
     else -> null
 }
 
 /**
- * Plain folders are drawn as an outline. Special folders (github, test, main, src, game, UI)
- * are solid accent-coloured folders with a large glyph in white (or black if the accent were light).
+ * Plain folders are drawn as an outline. Special folders are solid accent-coloured folders with a
+ * large glyph in white (or black if the accent were a light colour).
  */
 @Composable
 fun FolderIcon(name: String, size: Dp = 28.dp, tint: Color = G.c.dim) {
