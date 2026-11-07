@@ -52,6 +52,9 @@ sealed interface InlineEdit {
     class Rename(val file: File) : InlineEdit
 }
 
+/** Outcome of saving an inline create/rename: an [error] to show, or the new [openFile] to open. */
+class InlineResult(val error: String? = null, val openFile: File? = null)
+
 /** Hooks the live editor registers so the view model can reach it. */
 class EditorBridge {
     var getText: (() -> String)? = null
@@ -471,7 +474,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         selected.removeAll(under.toSet())
     }
 
-    /** A tap on empty space clears the highlight and leaves selection mode. */
+    /** A tap on empty space clears the highlight, cancels create/rename and leaves selection mode. */
     fun tapBlank() {
         cancelInline()
         highlighted = null
@@ -521,12 +524,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun cancelInline() { inlineEdit = null }
 
-    /** Returns an error message to show on the field, or null when the edit succeeded. */
-    suspend fun commitInline(raw: String): String? {
-        val edit = inlineEdit ?: return null
+    /**
+     * Saves the inline edit. On success a new FILE is returned in [InlineResult.openFile] so the
+     * caller can open it and close the drawer; on failure [InlineResult.error] is shown on the field.
+     */
+    suspend fun commitInline(raw: String): InlineResult {
+        val edit = inlineEdit ?: return InlineResult()
         when (edit) {
             is InlineEdit.Create -> {
-                Fs.validateName(raw, edit.parent, edit.isDir)?.let { return it }
+                Fs.validateName(raw, edit.parent, edit.isDir)?.let { return InlineResult(it) }
                 return try {
                     val created = withContext(Dispatchers.IO) {
                         if (edit.isDir) Fs.createDir(edit.parent, raw) else Fs.createFile(edit.parent, raw)
@@ -535,9 +541,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     highlighted = created.path
                     inlineEdit = null
                     invalidate()
-                    null
+                    InlineResult(openFile = if (edit.isDir) null else created)
                 } catch (e: Exception) {
-                    "Couldn't create it: ${e.message}"
+                    InlineResult("Couldn't create it: ${e.message}")
                 }
             }
             is InlineEdit.Rename -> {
@@ -545,19 +551,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val newName = raw.trimStart()
                 if (newName == old.name) {
                     inlineEdit = null
-                    return null
+                    return InlineResult()
                 }
-                val parent = old.parentFile ?: return "Can't rename this item"
-                Fs.validateName(raw, parent, old.isDirectory, ignore = old)?.let { return it }
+                val parent = old.parentFile ?: return InlineResult("Can't rename this item")
+                Fs.validateName(raw, parent, old.isDirectory, ignore = old)?.let { return InlineResult(it) }
                 return try {
                     val renamed = withContext(Dispatchers.IO) { Fs.rename(old, raw) }
                     remapPaths(old.path, renamed.path)
                     inlineEdit = null
                     highlighted = renamed.path
                     invalidate()
-                    null
+                    InlineResult()
                 } catch (e: Exception) {
-                    "Couldn't rename it: ${e.message}"
+                    InlineResult("Couldn't rename it: ${e.message}")
                 }
             }
         }
