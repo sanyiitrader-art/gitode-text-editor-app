@@ -38,10 +38,17 @@ back to a system font or a generic icon. The build log lists every warning.
 
 Markdown files (`.md`, `.markdown`) get a switch at the right end of the file-name sheet.
 Off is the normal code editor (with line numbers and highlighting). On shows the rendered
-document: wrapped text, no line numbers, no editing, vertical scrolling only.
-Rendering uses commonmark-java (with tables, strikethrough and task lists) and Gitode's
-own drawing code. Images load from the web (https) or from files next to the document;
-SVG images use AndroidSVG.
+document, with no line numbers and no editing.
+
+How it works: commonmark-java turns the Markdown into HTML (tables, strikethrough, task lists,
+autolinks, footnotes, heading anchors, GitHub-style alerts, front matter hidden) and Android's
+built-in WebView draws it with a page style built from the current Gitode theme. JavaScript is
+switched off and a content-security policy blocks scripts, frames and other off-site loading, so
+a document can't run anything. Raw HTML in a document (details, tables, centred text, inline
+tags) works like it does on GitHub; script, style, iframe, form and similar tags are removed.
+Images load from `https` links, from `data:` addresses and from files next to the document
+(SVG badges included). Math (`$...$`), definition lists and Mermaid diagrams are not standard
+Markdown and show as plain text.
 
 ## Theme preview screenshots
 
@@ -68,8 +75,8 @@ the placeholder text "Later".
 |---|---|---|
 | Sora Editor (Rosemoe) | code editor, TextMate engine | LGPL-2.1 |
 | Eclipse JGit | Git operations | EDL (BSD-3-Clause) |
-| commonmark-java | Markdown parsing | BSD-2-Clause |
-| AndroidSVG | SVG images in Markdown | Apache-2.0 |
+| commonmark-java and its extensions | Markdown to HTML | BSD-2-Clause |
+| Android System WebView (part of Android) | drawing the Markdown preview | provided by the system |
 | tm-grammars, tm-themes | grammars and themes (each grammar keeps its original license) | MIT |
 | JetBrains Mono, Fira Code, Source Code Pro, IBM Plex Mono, Roboto Mono, Cascadia Code, Inconsolata, Noto Sans Mono | editor fonts | SIL OFL 1.1 |
 | Ubuntu Mono | editor font | Ubuntu Font Licence 1.0 |
