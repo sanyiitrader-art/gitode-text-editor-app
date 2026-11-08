@@ -1,7 +1,10 @@
 package com.gitode.ui
 
 import android.content.Context
+import android.graphics.Canvas
+import android.graphics.Paint
 import android.text.InputType
+import android.util.TypedValue
 import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
@@ -220,6 +223,19 @@ class GitodeEditor(context: Context) : CodeEditor(context) {
     /** Indentation settings for the Tab key (always available). */
     var indentProvider: () -> SmartConfig = { SmartConfig(4, true, null) }
 
+    // ---- indentation guides (drawn on top of the editor, never part of the text)
+    var guidesOn = true
+    var guideColor: Int = 0x40808080
+    /** Spaces per indentation level for guide spacing; 0 means the file is indented with tabs. */
+    var guideUnitProvider: () -> Int = { 4 }
+    /** The editor's text size in sp, used only if the editor can't report its size in pixels. */
+    var guideTextSp = 14f
+
+    private val guidePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val spacePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val guideMethods = HashMap<String, java.lang.reflect.Method>()
+    private val guideMissing = HashSet<String>()
+
     private class Ctx(val line: Int, val col: Int, val before: String, val after: String)
 
     /** Undo / redo for the toolbar buttons. */
@@ -239,6 +255,139 @@ class GitodeEditor(context: Context) : CodeEditor(context) {
             clearFocus()
         } catch (e: Throwable) {
             // Ignore.
+        }
+    }
+
+    // ---- indentation guides
+
+    /** Reads a number from one of the editor's getters by name (null if this version doesn't have it). */
+    private fun num(name: String): Float? {
+        if (name in guideMissing) return null
+        var m = guideMethods[name]
+        if (m == null) {
+            try {
+                m = CodeEditor::class.java.getMethod(name)
+                guideMethods[name] = m
+            } catch (e: Throwable) {
+                guideMissing.add(name)
+                return null
+            }
+        }
+        val method = m ?: return null
+        return try {
+            (method.invoke(this) as? Number)?.toFloat()
+        } catch (e: Throwable) {
+            null
+        }
+    }
+
+    /** Width of a line's leading whitespace in columns, or -1 if the line is blank. */
+    private fun leadingCols(s: String, tabCols: Int): Int {
+        var col = 0
+        for (ch in s) {
+            when (ch) {
+                ' ' -> col++
+                '\t' -> col += tabCols
+                '\r' -> {}
+                else -> return col
+            }
+        }
+        return -1
+    }
+
+    private fun neighborIndent(from: Int, step: Int, lines: Int, tabCols: Int): Int {
+        var i = from + step
+        var n = 0
+        while (i in 0 until lines && n < 60) {
+            val c = leadingCols(text.getLineString(i), tabCols)
+            if (c >= 0) return c
+            i += step
+            n++
+        }
+        return 0
+    }
+
+    private fun drawGuides(canvas: Canvas) {
+        val offX = num("getOffsetX") ?: return
+        val offY = num("getOffsetY") ?: return
+        val region = num("measureTextRegionOffset") ?: return // where the text starts (right of the line numbers)
+        val dm = resources.displayMetrics
+        val sizePx = num("getTextSizePx") ?: TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, guideTextSp, dm)
+        spacePaint.typeface = typefaceText
+        spacePaint.textSize = sizePx
+        val fm = spacePaint.fontMetrics
+        val rowH = num("getRowHeight") ?: (fm.descent - fm.ascent)
+        if (rowH < 4f) return
+        val spaceW = spacePaint.measureText(" ")
+        if (spaceW <= 0f) return
+        val tabCols = (num("getTabWidth") ?: 4f).toInt().coerceAtLeast(1)
+        val unitCfg = guideUnitProvider()
+        val unit = if (unitCfg > 0) unitCfg else tabCols
+        val lines = text.lineCount
+        if (lines <= 0 || height <= 0) return
+
+        val first = (offY / rowH).toInt().coerceIn(0, lines - 1)
+        val last = ((offY + height) / rowH).toInt().coerceIn(0, lines - 1)
+        guidePaint.color = guideColor
+        guidePaint.strokeWidth = maxOf(1f, dm.density)
+
+        canvas.save()
+        // guides live in the text area only, so they never touch the line numbers
+        canvas.clipRect(region, 0f, width.toFloat(), height.toFloat())
+        for (ln in first..last) {
+            val top = ln * rowH - offY
+            val bottom = top + rowH
+            val s = text.getLineString(ln)
+            val indent = leadingCols(s, tabCols)
+            if (indent >= 0) {
+                // a line with text: one guide at the start of each indentation level, read from its real characters
+                var col = 0
+                var run = 0
+                var i = 0
+                while (i < s.length) {
+                    val ch = s[i]
+                    if (ch == '\t') {
+                        val x = region + col * spaceW - offX
+                        canvas.drawLine(x, top, x, bottom, guidePaint)
+                        col += tabCols
+                        run = 0
+                    } else if (ch == ' ') {
+                        if (run % unit == 0) {
+                            val x = region + col * spaceW - offX
+                            canvas.drawLine(x, top, x, bottom, guidePaint)
+                        }
+                        run++
+                        col++
+                    } else {
+                        break
+                    }
+                    i++
+                }
+            } else {
+                // a blank line keeps the guides of the code around it, so they don't break into dashes
+                val eff = minOf(
+                    neighborIndent(ln, -1, lines, tabCols),
+                    neighborIndent(ln, 1, lines, tabCols),
+                )
+                var c = 0
+                while (c < eff) {
+                    val x = region + c * spaceW - offX
+                    canvas.drawLine(x, top, x, bottom, guidePaint)
+                    c += unit
+                }
+            }
+        }
+        canvas.restore()
+    }
+
+    override fun dispatchDraw(canvas: Canvas) {
+        super.dispatchDraw(canvas)
+        if (guidesOn) {
+            try {
+                drawGuides(canvas)
+            } catch (e: Throwable) {
+                // The guides are only decoration: never let them break drawing.
+            }
         }
     }
 
@@ -422,6 +571,8 @@ private class EditorHolder {
     var syntaxTheme = ""
     var languageBuffer: Buffer? = null
     var languageSyntaxOn: Boolean? = null
+    var guides: Boolean? = null
+    var guideColor = 0
 }
 
 private fun applyChrome(scheme: EditorColorScheme, c: GitodeColors, overrideText: Boolean) {
@@ -467,6 +618,14 @@ private fun createEditor(context: Context, vm: MainViewModel, holder: EditorHold
     )
     ed.smartProvider = { if (vm.settings.smartActions) vm.smartConfig(holder.loaded) else null }
     ed.indentProvider = { vm.smartConfig(holder.loaded) }
+    ed.guideUnitProvider = {
+        val ind = holder.loaded?.indent
+        when {
+            ind != null && !ind.useSpaces -> 0
+            ind != null -> ind.width.coerceAtLeast(1)
+            else -> vm.settings.tabWidth.coerceAtLeast(1)
+        }
+    }
 
     ed.subscribeEvent(
         ContentChangeEvent::class.java,
@@ -531,9 +690,11 @@ private fun sync(
     fontFamily: String,
     syntaxOn: Boolean,
     syntaxTheme: String,
+    guides: Boolean,
 ) {
     if (holder.fontSize != fontSize) {
         ed.setTextSize(fontSize.toFloat())
+        ed.guideTextSp = fontSize.toFloat()
         holder.fontSize = fontSize
     }
     if (holder.fontFamily != fontFamily) {
@@ -556,6 +717,16 @@ private fun sync(
         holder.colors = colors
         holder.syntaxOn = syntaxOn
         holder.syntaxTheme = syntaxTheme
+    }
+
+    // Indentation guides: a faint line that stays visible on both dark and light themes.
+    val gColor = colors.dim.copy(alpha = if (colors.isDark) 0.30f else 0.38f).toArgb()
+    if (holder.guides != guides || holder.guideColor != gColor) {
+        ed.guidesOn = guides
+        ed.guideColor = gColor
+        holder.guides = guides
+        holder.guideColor = gColor
+        ed.invalidate()
     }
 
     if (holder.loaded !== buffer) {
@@ -605,6 +776,7 @@ fun CodeEditorView(
     val fontFamily = s.fontFamily
     val syntaxOn = s.syntaxHighlighting
     val syntaxTheme = s.syntaxTheme
+    val guides = s.indentGuides
     val holder = remember { EditorHolder() }
 
     DisposableEffect(Unit) {
@@ -622,7 +794,7 @@ fun CodeEditorView(
         modifier = modifier,
         factory = { ctx -> createEditor(ctx, vm, holder) },
         update = { ed ->
-            sync(context, vm, holder, ed, buffer, colors, fontSize, fontFamily, syntaxOn, syntaxTheme)
+            sync(context, vm, holder, ed, buffer, colors, fontSize, fontFamily, syntaxOn, syntaxTheme, guides)
         },
     )
     SideEffect { onEditor(holder.editor) }
