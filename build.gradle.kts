@@ -98,6 +98,7 @@ dependencies {
     implementation(platform("androidx.compose:compose-bom:2025.08.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.animation:animation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
@@ -113,13 +114,14 @@ dependencies {
     implementation("io.github.Rosemoe.sora-editor:editor")
     implementation("io.github.Rosemoe.sora-editor:language-textmate")
 
-    // Markdown preview: commonmark parses, Gitode's own Compose code draws it
+    // Markdown preview: commonmark turns Markdown into HTML, the system WebView draws it
     implementation("org.commonmark:commonmark:0.24.0")
     implementation("org.commonmark:commonmark-ext-gfm-tables:0.24.0")
     implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.24.0")
     implementation("org.commonmark:commonmark-ext-task-list-items:0.24.0")
-    // SVG images in Markdown (badges are usually SVG)
-    implementation("com.caverock:androidsvg-aar:1.4")
+    implementation("org.commonmark:commonmark-ext-autolink:0.24.0")
+    implementation("org.commonmark:commonmark-ext-footnotes:0.24.0")
+    implementation("org.commonmark:commonmark-ext-heading-anchor:0.24.0")
 
     // Git
     implementation("org.eclipse.jgit:org.eclipse.jgit:5.13.3.202401111512-r")
