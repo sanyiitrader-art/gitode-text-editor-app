@@ -52,6 +52,7 @@ import io.github.rosemoe.sora.langs.textmate.registry.provider.AssetsFileResolve
 import io.github.rosemoe.sora.widget.CodeEditor
 import io.github.rosemoe.sora.widget.component.EditorAutoCompletion
 import io.github.rosemoe.sora.widget.schemes.EditorColorScheme
+import kotlinx.coroutines.delay
 import org.eclipse.tm4e.core.registry.IThemeSource
 import org.json.JSONObject
 
@@ -189,6 +190,16 @@ private fun CodeEditor.tryCall(name: String, vararg args: Any) {
     }
 }
 
+/** Sets one of the editor's named colours; skipped if this editor version doesn't have that colour. */
+private fun EditorColorScheme.setByName(name: String, color: androidx.compose.ui.graphics.Color) {
+    try {
+        val key = EditorColorScheme::class.java.getField(name).getInt(null)
+        setColor(key, color.toArgb())
+    } catch (e: Throwable) {
+        // Unknown colour name in this version.
+    }
+}
+
 class ToolKey(val label: String, val text: String, val close: String? = null, val tab: Boolean = false)
 
 val TOOL_KEYS: List<ToolKey> = listOf(
@@ -210,6 +221,11 @@ class GitodeEditor(context: Context) : CodeEditor(context) {
     var indentProvider: () -> SmartConfig = { SmartConfig(4, true, null) }
 
     private class Ctx(val line: Int, val col: Int, val before: String, val after: String)
+
+    /** Undo / redo for the toolbar buttons. */
+    fun undoAction() { tryCall("undo") }
+
+    fun redoAction() { tryCall("redo") }
 
     /** Hides the keyboard and drops the editor's focus so it stays hidden until the editor is tapped again. */
     fun dismissKeyboard() {
@@ -421,6 +437,11 @@ private fun applyChrome(scheme: EditorColorScheme, c: GitodeColors, overrideText
     set(EditorColorScheme.SELECTED_TEXT_BACKGROUND, c.selection)
     set(EditorColorScheme.MATCHED_TEXT_BACKGROUND, c.matchHighlight)
     if (overrideText) set(EditorColorScheme.TEXT_NORMAL, c.text)
+
+    // The matching-bracket highlight follows the theme (it used to be drawn in black).
+    scheme.setByName("HIGHLIGHTED_DELIMITERS_BACKGROUND", c.accent.copy(alpha = 0.35f))
+    scheme.setByName("HIGHLIGHTED_DELIMITERS_FOREGROUND", c.text)
+    scheme.setByName("HIGHLIGHTED_DELIMITERS_UNDERLINE", c.accent)
 }
 
 private fun createEditor(context: Context, vm: MainViewModel, holder: EditorHolder): GitodeEditor {
@@ -606,9 +627,16 @@ fun CodeEditorView(
     )
     SideEffect { onEditor(holder.editor) }
 
+    // Jump to a line (go to line, search results, "Find in project"). When a file was just opened the
+    // editor needs a moment to load it, so wait for that first.
     val jump = vm.pendingJump
     LaunchedEffect(jump) {
         if (jump != null) {
+            var tries = 0
+            while (tries < 40 && !(holder.editor != null && holder.loaded === buffer)) {
+                delay(25)
+                tries++
+            }
             val ed = holder.editor
             if (ed != null && holder.loaded === buffer) {
                 val ln = jump.line.coerceIn(0, ed.text.lineCount - 1)
@@ -624,7 +652,20 @@ fun CodeEditorView(
 
 // ====================================================================== smart-key toolbar
 
-/** One horizontally scrolling row of keys that phone keyboards lack. */
+@Composable
+private fun IconKey(ic: Ic, onClick: () -> Unit) {
+    val c = G.c
+    Box(
+        Modifier.padding(horizontal = 2.dp).height(40.dp).widthIn(min = 42.dp)
+            .clip(RoundedCornerShape(10.dp)).background(c.card)
+            .clickable(onClick = onClick).padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Ico(ic, c.text, 20.dp)
+    }
+}
+
+/** One horizontally scrolling row of keys that phone keyboards lack. Undo and Redo come first, then Tab. */
 @Composable
 fun SmartKeysBar(editor: GitodeEditor?, modifier: Modifier = Modifier) {
     val c = G.c
@@ -637,6 +678,8 @@ fun SmartKeysBar(editor: GitodeEditor?, modifier: Modifier = Modifier) {
                 .padding(start = 30.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            IconKey(Ic.Undo) { editor?.undoAction() }
+            IconKey(Ic.Redo) { editor?.redoAction() }
             for (k in TOOL_KEYS) {
                 Box(
                     Modifier.padding(horizontal = 2.dp).height(40.dp).widthIn(min = 42.dp)
