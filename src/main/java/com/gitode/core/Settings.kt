@@ -72,6 +72,8 @@ class Settings(context: Context) {
     var useSpaces by bool("use_spaces", true)
     var autosave by bool("autosave", false)
     var autosaveDelaySec by int("autosave_delay_sec", 2)
+    /** Subtle vertical lines that show indentation levels (a visual decoration only). */
+    var indentGuides by bool("indent_guides", true)
 
     // ---- Appearance settings
     var theme by str("theme", "obsidian")
