@@ -75,6 +75,7 @@ object Fs {
         // newest additions
         "md" to "markdown", "markdown" to "markdown",
         "txt" to "text",
+        "log" to "text", // log files are plain text (own logo, see iconKeyOf)
         "c" to "c",
         "graphql" to "graphql", "gql" to "graphql", "graphqls" to "graphql",
         "hs" to "haskell", "lhs" to "haskell",
@@ -115,15 +116,15 @@ object Fs {
         "rust", "toml", "gdscript", "tsx", "yaml", "xml", "qmake", "gitignore",
         "csharp", "go", "dart", "lua", "sql", "html", "css", "json", "shellscript", "powershell",
         "dockerfile", "makefile", "r", "julia", "matlab", "scala",
-        "markdown", "txt", "c", "graphql", "haskell", "elixir", "erlang", "perl", "asm", "zig",
+        "markdown", "txt", "log", "c", "graphql", "haskell", "elixir", "erlang", "perl", "asm", "zig",
         "nix", "terraform", "vue", "svelte", "clojure",
     )
 
     fun ext(name: String): String = name.substringAfterLast('.', "").lowercase()
 
     /**
-     * Language key for a file name, or null for unknown files. ".txt" gives "text", a language
-     * with no highlighting and no smart pairing (plain text).
+     * Language key for a file name, or null for unknown files. ".txt" and ".log" give "text", a
+     * language with no highlighting and no smart pairing (plain text).
      */
     fun languageOf(name: String): String? {
         val lower = name.lowercase()
@@ -138,6 +139,7 @@ object Fs {
 
     /** Key of the bundled logo for a file name, or null if it has none. */
     fun iconKeyOf(name: String): String? {
+        if (ext(name) == "log") return "log"
         val lang = languageOf(name) ?: return null
         // .dockerignore and .npmignore share the ignore-file highlighting but not Git's logo.
         if (lang == "gitignore" && ext(name) != "gitignore") return null
@@ -154,6 +156,7 @@ object Fs {
     /** Short human description of a file's type, e.g. "Kotlin" or "PNG image". */
     fun typeLabel(name: String, isDir: Boolean): String {
         if (isDir) return "Folder"
+        if (ext(name) == "log") return "Log"
         val lang = languageOf(name)
         if (lang != null) return LANG_NAMES[lang] ?: lang
         val e = ext(name)
