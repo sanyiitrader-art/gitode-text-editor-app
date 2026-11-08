@@ -35,6 +35,8 @@ enum class Ic {
     // glyphs for special folders
     Cube, Tray, Book, Library, Sliders, Grid, Terminal, Database, Plug, Layers, TypeA, Note,
     Film, Globe, Android, Apple, Monitor, Archive,
+    // editor controls
+    Undo, Redo, Tabs,
 }
 
 @Composable
@@ -267,6 +269,33 @@ fun DrawScope.drawGlyph(ic: Ic, color: Color, s: Float, sw: Float) {
             box(3.5f, 4f, 20.5f, 9f, 1.5f)
             poly(5f, 9f, 5f, 19.5f, 19f, 19.5f, 19f, 9f)
             line(10f, 13f, 14f, 13f)
+        }
+
+        // ---- editor controls
+        Ic.Undo -> {
+            poly(9f, 5f, 4f, 10f, 9f, 15f)
+            val p = Path()
+            p.moveTo(4f * s, 10f * s)
+            p.lineTo(14f * s, 10f * s)
+            p.cubicTo(18f * s, 10f * s, 20.5f * s, 12.5f * s, 20.5f * s, 15.5f * s)
+            p.cubicTo(20.5f * s, 18.5f * s, 18f * s, 20.5f * s, 14.5f * s, 20.5f * s)
+            p.lineTo(10f * s, 20.5f * s)
+            drawPath(p, color, style = stroke)
+        }
+        Ic.Redo -> {
+            poly(15f, 5f, 20f, 10f, 15f, 15f)
+            val p = Path()
+            p.moveTo(20f * s, 10f * s)
+            p.lineTo(10f * s, 10f * s)
+            p.cubicTo(6f * s, 10f * s, 3.5f * s, 12.5f * s, 3.5f * s, 15.5f * s)
+            p.cubicTo(3.5f * s, 18.5f * s, 6f * s, 20.5f * s, 9.5f * s, 20.5f * s)
+            p.lineTo(14f * s, 20.5f * s)
+            drawPath(p, color, style = stroke)
+        }
+        Ic.Tabs -> { // open files: a square with a downward arrow inside
+            box(3.5f, 3.5f, 20.5f, 20.5f, 3f)
+            line(12f, 8f, 12f, 16f)
+            poly(8.5f, 12.5f, 12f, 16f, 15.5f, 12.5f)
         }
     }
 }
