@@ -519,7 +519,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ================================================================ the drawer's search box (file names)
 
-    fun setDrawerQuery(q: String) {
+    fun updateDrawerQuery(q: String) {
         drawerQuery = q
         drawerJob?.cancel()
         val dir = root
