@@ -277,7 +277,7 @@ fun ExplorerDrawer(
             ) {
                 DrawerSearchBar(
                     value = vm.drawerQuery,
-                    onValue = { vm.setDrawerQuery(it) },
+                                     onValue = { vm.updateDrawerQuery(it) },
                     onFocusChange = { searchFocused = it },
                 )
             }
