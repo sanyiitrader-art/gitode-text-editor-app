@@ -4,6 +4,7 @@ import android.app.Application
 import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateSetOf
@@ -20,6 +21,7 @@ import com.gitode.core.normalizeRepoName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -35,6 +37,7 @@ class Buffer(file: File, text: String, val crlf: Boolean, dirty: Boolean = false
     val indent: IndentStyle? = detectIndent(text)
 }
 
+/** One search match. [path] is set for project-wide results (which file it is in). */
 class SearchHit(
     val line: Int, // zero-based line number
     val start: Int,
@@ -42,7 +45,11 @@ class SearchHit(
     val preview: String,
     val previewStart: Int,
     val previewEnd: Int,
+    val path: String? = null,
 )
+
+/** A file found by name in the drawer's search box. [dir] is shown under the name, e.g. "Game/core". */
+class FileHit(val file: File, val dir: String)
 
 /** Ask the editor to scroll to [line] (zero-based) and select columns [start]..[end]. */
 class Jump(val line: Int, val start: Int, val end: Int)
@@ -81,6 +88,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         private set
     val bridge = EditorBridge()
 
+    /** Recently opened files, most recent first (the panel under the top bar). */
+    val tabs = mutableStateListOf<String>()
+
     // ---- messages and requests
     var notice by mutableStateOf<String?>(null)
     var duplicateNotice by mutableStateOf<String?>(null)
@@ -101,13 +111,38 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         private set
     private val dirCache = HashMap<String, List<File>>()
 
-    // ---- search
+    // ---- search in the open file
     var searchQuery by mutableStateOf("")
         private set
     var searchHits by mutableStateOf<List<SearchHit>>(emptyList())
         private set
     var searchRan by mutableStateOf(false)
         private set
+
+    // ---- search in the whole project
+    var projQuery by mutableStateOf("")
+        private set
+    var projHits by mutableStateOf<List<SearchHit>>(emptyList())
+        private set
+    var projRan by mutableStateOf(false)
+        private set
+    var projRunning by mutableStateOf(false)
+        private set
+    private var projJob: Job? = null
+
+    // ---- the drawer's file-name search box
+    var drawerQuery by mutableStateOf("")
+        private set
+    var drawerResults by mutableStateOf<List<FileHit>>(emptyList())
+        private set
+    var drawerBusy by mutableStateOf(false)
+        private set
+    private var drawerJob: Job? = null
+
+    // every file in the open folder, cached briefly so typing in a search box stays fast
+    @Volatile
+    private var fileIndex: List<File>? = null
+    private var indexTime = 0L
 
     private val loose = File("/gitode-loose")
     private val persistRoot: File get() = root ?: loose
@@ -162,10 +197,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         root = dir
         val key = dir ?: loose
         val stored = withContext(Dispatchers.IO) { projects.buffers(key) }
+        val storedTabs = withContext(Dispatchers.IO) { projects.tabs(key) }
         repoName = withContext(Dispatchers.IO) { projects.repoName(key) }
         val act = withContext(Dispatchers.IO) { projects.active(key) }
         if (dir != null) withContext(Dispatchers.IO) { projects.setLast(dir) }
         for (b in stored) buffers[b.path] = Buffer(File(b.path), b.text, b.crlf, dirty = true)
+        tabs.addAll(storedTabs.filter { File(it).exists() || buffers.containsKey(it) })
+        // a file with unsaved edits always has a tab, so it can't be lost from view
+        for (b in stored) if (!tabs.contains(b.path)) tabs.add(b.path)
         if (act != null && (File(act).exists() || buffers.containsKey(act))) openFileInternal(File(act))
         if (dir != null) {
             viewModelScope.launch(Dispatchers.Default) { duplicates.rebuild(dir) }
@@ -178,7 +217,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         workJob?.cancel()
         autosaveJob?.cancel()
         searchJob?.cancel()
+        projJob?.cancel()
+        drawerJob?.cancel()
         buffers.clear()
+        tabs.clear()
         active = null
         imageFile = null
         expanded.clear()
@@ -187,12 +229,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         highlighted = null
         inlineEdit = null
         dirCache.clear()
+        fileIndex = null
         treeVersion++
         duplicateNotice = null
         lastDupKey = null
         searchQuery = ""
         searchHits = emptyList()
         searchRan = false
+        projQuery = ""
+        projHits = emptyList()
+        projRan = false
+        projRunning = false
+        drawerQuery = ""
+        drawerResults = emptyList()
+        drawerBusy = false
         pendingJump = null
     }
 
@@ -233,6 +283,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             activate(existing)
             return
         }
+        if (!file.exists()) {
+            toast("${file.name} no longer exists")
+            if (tabs.remove(file.path)) persistTabs()
+            return
+        }
         when (withContext(Dispatchers.IO) { Fs.kindOf(file) }) {
             Fs.Kind.TEXT -> {
                 try {
@@ -248,6 +303,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 active = null
                 imageFile = file
                 duplicateNotice = null
+                touchTab(file.path)
                 val key = persistRoot
                 viewModelScope.launch(Dispatchers.IO) { projects.setActive(key, file.path) }
             }
@@ -260,10 +316,72 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         imageFile = null
         duplicateNotice = null
         lastDupKey = null
+        touchTab(b.file.path)
         val key = persistRoot
         viewModelScope.launch(Dispatchers.IO) { projects.setActive(key, b.file.path) }
         if (searchQuery.isNotEmpty()) search(searchQuery)
     }
+
+    // ================================================================ recent files (tabs)
+
+    private fun persistTabs() {
+        val key = persistRoot
+        val list = tabs.toList()
+        viewModelScope.launch(Dispatchers.IO) { projects.setTabs(key, list) }
+    }
+
+    /** Moves a file to the front of the recent list (never dropping files with unsaved edits). */
+    private fun touchTab(path: String) {
+        tabs.remove(path)
+        tabs.add(0, path)
+        var i = tabs.size - 1
+        while (tabs.size > MAX_TABS && i > 0) {
+            val p = tabs[i]
+            if (buffers[p]?.dirty != true) tabs.removeAt(i)
+            i--
+        }
+        persistTabs()
+    }
+
+    /**
+     * Closes a tab. With unsaved edits, [saveFirst] writes them to the file first; otherwise they are discarded.
+     * If it was the file on screen, the next most recent file opens.
+     */
+    fun closeTab(path: String, saveFirst: Boolean) {
+        viewModelScope.launch { closeTabInternal(path, saveFirst) }
+    }
+
+    private suspend fun closeTabInternal(path: String, saveFirst: Boolean) {
+        flushActive()
+        val b = buffers[path]
+        val key = persistRoot
+        if (b != null && b.dirty) {
+            if (saveFirst) {
+                if (!save(b)) return
+            } else {
+                withContext(Dispatchers.IO) { projects.dropBuffer(key, path) }
+                val disk = withContext(Dispatchers.IO) {
+                    try { Fs.readText(b.file).text } catch (e: Exception) { null }
+                }
+                withContext(Dispatchers.Default) { duplicates.update(path, disk) }
+            }
+        }
+        val wasShown = active?.file?.path == path || imageFile?.path == path
+        buffers.remove(path)
+        tabs.remove(path)
+        persistTabs()
+        if (wasShown) {
+            active = null
+            imageFile = null
+            duplicateNotice = null
+            lastDupKey = null
+            val next = tabs.firstOrNull()
+            if (next != null) openFileInternal(File(next))
+            else withContext(Dispatchers.IO) { projects.setActive(key, null) }
+        }
+    }
+
+    // ================================================================ editing and saving
 
     /** The editor calls this on every user edit (cheap: it only schedules work). */
     fun onTextChanged() {
@@ -366,6 +484,84 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         return null
     }
 
+    // ================================================================ files in the open folder
+
+    private fun scanFiles(dir: File): List<File> {
+        val out = ArrayList<File>()
+        val stack = ArrayDeque<File>()
+        stack.add(dir)
+        while (stack.isNotEmpty() && out.size < MAX_INDEX) {
+            val d = stack.removeLast()
+            val kids = d.listFiles() ?: continue
+            for (f in kids) {
+                if (java.nio.file.Files.isSymbolicLink(f.toPath())) continue
+                if (f.isDirectory) {
+                    if (f.name !in SKIP_DIRS) stack.add(f)
+                } else if (!f.name.endsWith(".gitode-tmp")) {
+                    out.add(f)
+                }
+            }
+        }
+        out.sortBy { it.path.lowercase() }
+        return out
+    }
+
+    @Synchronized
+    private fun filesOf(dir: File): List<File> {
+        val now = System.currentTimeMillis()
+        val cached = fileIndex
+        if (cached != null && now - indexTime < 8000) return cached
+        val fresh = scanFiles(dir)
+        fileIndex = fresh
+        indexTime = now
+        return fresh
+    }
+
+    // ================================================================ the drawer's search box (file names)
+
+    fun setDrawerQuery(q: String) {
+        drawerQuery = q
+        drawerJob?.cancel()
+        val dir = root
+        if (q.isBlank() || dir == null) {
+            drawerResults = emptyList()
+            drawerBusy = false
+            return
+        }
+        drawerBusy = true
+        drawerJob = viewModelScope.launch(Dispatchers.Default) {
+            delay(120)
+            val needle = q.trim().lowercase()
+            val byPath = needle.contains('/')
+            val matches = ArrayList<FileHit>()
+            for (f in filesOf(dir)) {
+                if (!isActive) return@launch
+                val rel = relDir(dir, f)
+                val hay = if (byPath) (rel + "/" + f.name).lowercase() else f.name.lowercase()
+                if (hay.contains(needle)) {
+                    matches.add(FileHit(f, rel))
+                    if (matches.size >= MAX_NAME_HITS) break
+                }
+            }
+            matches.sortWith(
+                compareBy<FileHit>({ !it.file.name.lowercase().startsWith(needle) }, { it.file.name.lowercase() }),
+            )
+            withContext(Dispatchers.Main) {
+                if (drawerQuery == q) {
+                    drawerResults = matches
+                    drawerBusy = false
+                }
+            }
+        }
+    }
+
+    /** The folder a file is in, starting at the open folder's own name: "Game/core". */
+    private fun relDir(dir: File, f: File): String {
+        val parent = f.parentFile ?: return dir.name
+        val rel = parent.path.removePrefix(dir.path).trim('/')
+        return if (rel.isEmpty()) dir.name else dir.name + "/" + rel
+    }
+
     // ================================================================ search, go to line, replace
 
     fun search(query: String) {
@@ -384,7 +580,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         searchJob = viewModelScope.launch(Dispatchers.Default) {
-            val hits = findHits(text, query)
+            val hits = findHits(text, query, null, MAX_HITS)
             withContext(Dispatchers.Main) {
                 searchHits = hits
                 searchRan = true
@@ -392,12 +588,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun findHits(text: String, query: String): List<SearchHit> {
+    private fun findHits(text: String, query: String, path: String?, max: Int): List<SearchHit> {
         val hits = ArrayList<SearchHit>()
         var lineNo = 0
         for (line in text.split('\n')) {
             var i = line.indexOf(query, 0, ignoreCase = true)
-            while (i >= 0 && hits.size < MAX_HITS) {
+            while (i >= 0 && hits.size < max) {
                 val from = (i - 30).coerceAtLeast(0)
                 val to = (i + query.length + 50).coerceAtMost(line.length)
                 val prefix = if (from > 0) "…" else ""
@@ -406,16 +602,70 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val trimmed = raw.trimStart()
                 val lead = raw.length - trimmed.length
                 val ms = (prefix.length + (i - from) - lead).coerceAtLeast(0)
-                hits.add(SearchHit(lineNo, i, i + query.length, prefix + trimmed + suffix, ms, ms + query.length))
+                hits.add(SearchHit(lineNo, i, i + query.length, prefix + trimmed + suffix, ms, ms + query.length, path))
                 i = line.indexOf(query, i + query.length, ignoreCase = true)
             }
-            if (hits.size >= MAX_HITS) break
+            if (hits.size >= max) break
             lineNo++
         }
         return hits
     }
 
-    fun jumpToHit(h: SearchHit) { pendingJump = Jump(h.line, h.start, h.end) }
+    /** Searches every text file in the open folder (unsaved edits of open files included). */
+    fun searchProject(query: String) {
+        projQuery = query
+        projJob?.cancel()
+        val dir = root
+        if (query.isEmpty() || dir == null) {
+            projHits = emptyList()
+            projRan = false
+            projRunning = false
+            return
+        }
+        flushActive()
+        val open = HashMap<String, String>()
+        for ((p, b) in buffers) open[p] = b.text
+        projRunning = true
+        projRan = false
+        projJob = viewModelScope.launch(Dispatchers.Default) {
+            delay(250)
+            val hits = ArrayList<SearchHit>()
+            for (f in filesOf(dir)) {
+                if (!isActive) return@launch
+                if (hits.size >= MAX_PROJECT_HITS) break
+                val live = open[f.path]
+                val text: String = if (live != null) {
+                    live
+                } else {
+                    if (f.length() !in 1L..MAX_SEARCH_BYTES) continue
+                    if (Fs.kindOf(f) != Fs.Kind.TEXT) continue
+                    try { f.readText() } catch (e: Exception) { continue }
+                }
+                if (!text.contains(query, ignoreCase = true)) continue
+                hits.addAll(findHits(text.replace("\r\n", "\n"), query, f.path, PER_FILE_HITS))
+            }
+            withContext(Dispatchers.Main) {
+                if (projQuery == query) {
+                    projHits = hits
+                    projRan = true
+                    projRunning = false
+                }
+            }
+        }
+    }
+
+    /** Opens the match: for a project result the file opens first, then the editor scrolls to the text and selects it. */
+    fun jumpToHit(h: SearchHit) {
+        val p = h.path
+        if (p == null) {
+            pendingJump = Jump(h.line, h.start, h.end)
+            return
+        }
+        viewModelScope.launch {
+            openFileInternal(File(p))
+            pendingJump = Jump(h.line, h.start, h.end)
+        }
+    }
 
     fun lineCount(): Int {
         flushActive()
@@ -448,6 +698,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun invalidate() {
         dirCache.clear()
+        fileIndex = null
         treeVersion++
     }
 
@@ -589,6 +840,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         for (p in expanded.toList()) {
             mapPath(p, old, new)?.let { expanded.remove(p); expanded.add(it) }
         }
+        for (i in tabs.indices) {
+            mapPath(tabs[i], old, new)?.let { tabs[i] = it }
+        }
+        persistTabs()
         withContext(Dispatchers.IO) { projects.remapPaths(key, old, new) }
         root?.let { dir -> viewModelScope.launch(Dispatchers.Default) { duplicates.rebuild(dir) } }
     }
@@ -626,6 +881,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             withContext(Dispatchers.IO) { projects.setActive(key, null) }
         }
         imageFile?.let { if (inside(it.path, file.path)) imageFile = null }
+        tabs.removeAll { inside(it, file.path) }
+        persistTabs()
         selected.removeAll(selected.filter { inside(it, file.path) }.toSet())
         expanded.removeAll(expanded.filter { inside(it, file.path) }.toSet())
         highlighted?.let { if (inside(it, file.path)) highlighted = null }
@@ -647,5 +904,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     companion object {
         private const val MAX_HITS = 1000
+        private const val MAX_PROJECT_HITS = 600
+        private const val PER_FILE_HITS = 40
+        private const val MAX_SEARCH_BYTES = 1024L * 1024
+        private const val MAX_NAME_HITS = 200
+        private const val MAX_INDEX = 50000
+        private const val MAX_TABS = 40
+        private val SKIP_DIRS = setOf(".git", "node_modules", ".gradle", ".idea", "__pycache__")
     }
 }
