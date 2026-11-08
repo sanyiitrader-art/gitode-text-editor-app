@@ -7,7 +7,7 @@ import java.io.File
 import java.security.MessageDigest
 
 /**
- * Per-project-folder persistence: repository name, active file and unsaved editor buffers.
+ * Per-project-folder persistence: repository name, active file, recent files and unsaved editor buffers.
  * Every folder gets its own directory, so one project's state can never leak into another.
  */
 class Projects(context: Context) {
@@ -72,6 +72,32 @@ class Projects(context: Context) {
         synchronized(lock) {
             val meta = readMeta(root)
             if (path == null) meta.remove("active") else meta.put("active", path)
+            writeMeta(root, meta)
+        }
+    }
+
+    // ---------------------------------------------------------------- recent files (the tabs panel)
+
+    fun tabs(root: File): List<String> {
+        synchronized(lock) {
+            val arr = readMeta(root).optJSONArray("tabs")
+            val out = ArrayList<String>()
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val s = arr.optString(i, "")
+                    if (s.isNotEmpty()) out.add(s)
+                }
+            }
+            return out
+        }
+    }
+
+    fun setTabs(root: File, list: List<String>) {
+        synchronized(lock) {
+            val meta = readMeta(root)
+            val arr = JSONArray()
+            for (s in list) arr.put(s)
+            meta.put("tabs", arr)
             writeMeta(root, meta)
         }
     }
