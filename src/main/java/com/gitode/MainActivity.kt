@@ -79,7 +79,7 @@ class GitodeApp : Application() {
     }
 }
 
-private enum class Screen { Editor, Search, Settings }
+private enum class Screen { Editor, Search, Project, Settings }
 
 class MainActivity : ComponentActivity() {
     private val vm: MainViewModel by viewModels()
@@ -245,6 +245,7 @@ class MainActivity : ComponentActivity() {
             EditorScreen(
                 vm = vm,
                 onSearch = { vm.flushActive(); screen = Screen.Search },
+                onFindInProject = { vm.flushActive(); screen = Screen.Project },
                 onSettings = { keyboard?.hide(); screen = Screen.Settings },
                 onActions = { vm.toast("Actions arrive in the next update") },
                 onPickFolder = { folderPicker.launch(null) },
@@ -256,6 +257,17 @@ class MainActivity : ComponentActivity() {
                 Overlay {
                     SearchScreen(
                         vm = vm,
+                        project = false,
+                        onClose = { screen = Screen.Editor },
+                        onPick = { hit -> vm.jumpToHit(hit); screen = Screen.Editor },
+                    )
+                }
+            }
+            if (screen == Screen.Project) {
+                Overlay {
+                    SearchScreen(
+                        vm = vm,
+                        project = true,
                         onClose = { screen = Screen.Editor },
                         onPick = { hit -> vm.jumpToHit(hit); screen = Screen.Editor },
                     )
