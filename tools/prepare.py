@@ -159,7 +159,7 @@ LANG_CONFIG = {
     ],
 }
 
-# Plain text (.txt): a grammar with no rules, so nothing is coloured.
+# Plain text (.txt, .log): a grammar with no rules, so nothing is coloured.
 PLAIN_GRAMMAR = {"name": "text", "scopeName": "text.plain", "patterns": []}
 
 XML_GRAMMAR = {
@@ -521,9 +521,9 @@ LOGOS = {
     "julia": ("devicon", "julia", None),
     "matlab": ("devicon", "matlab", None),
     "scala": ("devicon", "scala", None),
-    # ---- newest additions
     "markdown": ("devicon", "markdown", None),
     "txt": ("local", None, None),                  # drawn here: a text document
+    "log": ("local", None, None),                  # drawn here: a log listing
     "c": ("devicon", "c", None),
     "graphql": ("simple", "graphql", "#E10098"),
     "haskell": ("devicon", "haskell", None),
@@ -573,6 +573,14 @@ LOCAL_SVGS = {
         + '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>'
         '<line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="15.5" x2="15" y2="15.5"/>'
         '<line x1="9" y1="19" x2="12.5" y2="19"/></svg>'
+    ),
+    # a listing of log lines: short marks on the left, text bars of different lengths on the right
+    "log": (
+        _SVG_HEAD.format(c="#D9A441", w="2")
+        + '<rect x="3.5" y="3.5" width="17" height="17" rx="2.5"/>'
+        '<line x1="7" y1="8.5" x2="8.6" y2="8.5"/><line x1="11" y1="8.5" x2="17" y2="8.5"/>'
+        '<line x1="7" y1="12" x2="8.6" y2="12"/><line x1="11" y1="12" x2="15" y2="12"/>'
+        '<line x1="7" y1="15.5" x2="8.6" y2="15.5"/><line x1="11" y1="15.5" x2="16.5" y2="15.5"/></svg>'
     ),
     "asm": (
         _SVG_HEAD.format(c="#6C8EBF", w="1.9")
