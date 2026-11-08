@@ -4,17 +4,25 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -31,8 +39,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
@@ -52,12 +62,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInWindow
@@ -83,10 +96,13 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.roundToInt
 
+private class TabInfo(val path: String, val name: String, val dirty: Boolean, val active: Boolean)
+
 @Composable
 fun EditorScreen(
     vm: MainViewModel,
     onSearch: () -> Unit,
+    onFindInProject: () -> Unit,
     onSettings: () -> Unit,
     onActions: () -> Unit,
     onPickFolder: () -> Unit,
@@ -110,6 +126,12 @@ fun EditorScreen(
     // Markdown files currently shown as a preview (the switch in the file-name sheet is "on").
     val previewPaths = remember { mutableStateSetOf<String>() }
 
+    // recent-files panel
+    var tabsOpen by remember { mutableStateOf(false) }
+    var panelBounds by remember { mutableStateOf<Rect?>(null) }
+    var buttonBounds by remember { mutableStateOf<Rect?>(null) }
+    var closeAsk by remember { mutableStateOf<String?>(null) }
+
     fun closeKeyboard() {
         editor?.dismissKeyboard()
         hideKeyboard(view)
@@ -120,13 +142,22 @@ fun EditorScreen(
 
     fun settle(target: Float) {
         anim?.cancel()
-        if (target == 0f) vm.cancelInline()
+        if (target == 0f) {
+            vm.cancelInline()
+            hideKeyboard(view)
+        }
         anim = scope.launch { animate(p, target, animationSpec = tween(220)) { v, _ -> p = v } }
     }
 
     // The keyboard goes away as soon as the drawer starts to open and stays away until it is needed again.
-    LaunchedEffect(p > 0f) { if (p > 0f) closeKeyboard() }
+    LaunchedEffect(p > 0f) {
+        if (p > 0f) {
+            closeKeyboard()
+            tabsOpen = false
+        }
+    }
     BackHandler(enabled = p > 0f) { settle(0f) }
+    BackHandler(enabled = tabsOpen && p == 0f) { tabsOpen = false }
 
     val active = vm.active
     val image = vm.imageFile
@@ -134,7 +165,31 @@ fun EditorScreen(
     val isMd = active != null && Fs.isMarkdown(active.file.name)
     val previewing = active != null && isMd && previewPaths.contains(active.file.path)
 
-    Box(Modifier.fillMaxSize()) {
+    // A search result or "go to line" needs the editor, so a Markdown preview switches back to editing.
+    val jump = vm.pendingJump
+    LaunchedEffect(jump) {
+        if (jump != null) active?.let { previewPaths.remove(it.file.path) }
+    }
+
+    val activePath = active?.file?.path ?: image?.path
+    val tabInfos = vm.tabs.map { path ->
+        TabInfo(path, File(path).name, vm.buffers[path]?.dirty == true, path == activePath)
+    }
+
+    Box(
+        Modifier.fillMaxSize().pointerInput(tabsOpen) {
+            // Any touch outside the recent-files panel closes it. The touch is only observed, never consumed,
+            // so whatever was touched still does its job.
+            if (tabsOpen) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    val inPanel = panelBounds?.contains(down.position) == true
+                    val inButton = buttonBounds?.contains(down.position) == true
+                    if (!inPanel && !inButton) tabsOpen = false
+                }
+            }
+        },
+    ) {
         Column(Modifier.screenBase().imePadding()) {
             // ---- fixed top bar
             Row(
@@ -146,6 +201,10 @@ fun EditorScreen(
                 Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
                     CenterButton(if (connected) "Push" else "Connect to GitHub", if (connected) onPush else onConnect)
                 }
+                IconBtn(
+                    Ic.Tabs, { tabsOpen = !tabsOpen },
+                    modifier = Modifier.onGloballyPositioned { buttonBounds = it.boundsInRoot() },
+                )
                 Box {
                     IconBtn(Ic.More, { menuOpen = true })
                     EditorMenu(
@@ -153,6 +212,7 @@ fun EditorScreen(
                         onDismiss = { menuOpen = false },
                         hasFile = active != null,
                         canEdit = active != null && !previewing,
+                        hasProject = vm.root != null,
                         autosave = vm.settings.autosave,
                         onAutosave = { vm.settings.autosave = it },
                         onSave = { scope.launch { if (vm.saveCurrent()) vm.toast("Saved") } },
@@ -160,6 +220,7 @@ fun EditorScreen(
                         onOpenFile = onPickFile,
                         onOpenFolder = { if (vm.hasUnsaved) showUnsaved = true else onPickFolder() },
                         onSearch = onSearch,
+                        onFindInProject = onFindInProject,
                         onReplace = { showReplace = true },
                         onGoto = { showGoto = true },
                         onRepo = { if (vm.root == null) vm.toast("Open a folder first") else showRepo = true },
@@ -220,6 +281,32 @@ fun EditorScreen(
             }
 
             if (active != null && !previewing) SmartKeysBar(editor)
+        }
+
+        // ---- recent-files panel: a layer that slides down from the top bar's lower edge
+        Box(
+            Modifier.align(Alignment.TopStart).fillMaxWidth().statusBarsPadding()
+                .padding(top = 65.dp).clipToBounds(),
+        ) {
+            AnimatedVisibility(
+                visible = tabsOpen,
+                enter = slideInVertically(animationSpec = tween(180), initialOffsetY = { -it }) +
+                    fadeIn(animationSpec = tween(180)),
+                exit = slideOutVertically(animationSpec = tween(160), targetOffsetY = { -it }) +
+                    fadeOut(animationSpec = tween(160)),
+            ) {
+                TabsPanel(
+                    tabs = tabInfos,
+                    onOpen = { path ->
+                        tabsOpen = false
+                        vm.openFile(File(path))
+                    },
+                    onClose = { path ->
+                        if (vm.buffers[path]?.dirty == true) closeAsk = path else vm.closeTab(path, false)
+                    },
+                    modifier = Modifier.onGloballyPositioned { panelBounds = it.boundsInRoot() },
+                )
+            }
         }
 
         // ---- duplicate-content reminder: a layer at the very top of the screen (never blocks anything)
@@ -296,6 +383,17 @@ fun EditorScreen(
         }
     }
 
+    closeAsk?.let { path ->
+        ThreeButtonDialog(
+            title = "Close ${File(path).name}?",
+            message = "It has unsaved changes. Save writes them to the file first; Discard throws them away.",
+            onCancel = { closeAsk = null },
+            middleText = "Discard",
+            onMiddle = { closeAsk = null; vm.closeTab(path, false) },
+            rightText = "Save",
+            onRight = { closeAsk = null; vm.closeTab(path, true) },
+        )
+    }
     if (showUnsaved) {
         ThreeButtonDialog(
             title = "There are unsaved changes in this session",
@@ -330,6 +428,56 @@ fun EditorScreen(
             onCancel = { showRepo = false },
             onSave = { name -> val err = vm.setRepo(name); if (err == null) showRepo = false; err },
         )
+    }
+}
+
+// ---------------------------------------------------------------- recent-files panel
+
+@Composable
+private fun TabsPanel(
+    tabs: List<TabInfo>,
+    onOpen: (String) -> Unit,
+    onClose: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = G.c
+    Column(modifier.fillMaxWidth().background(c.surface)) {
+        if (tabs.isEmpty()) {
+            Txt("No recent files", Modifier.padding(horizontal = 18.dp, vertical = 16.dp), color = c.dim, size = 14.sp)
+        } else {
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                for (t in tabs) TabChip(t, onOpen, onClose)
+            }
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(c.outline))
+    }
+}
+
+@Composable
+private fun TabChip(t: TabInfo, onOpen: (String) -> Unit, onClose: (String) -> Unit) {
+    val c = G.c
+    val shape = RoundedCornerShape(12.dp)
+    Row(
+        Modifier.height(40.dp).clip(shape)
+            .background(if (t.active) c.accent.copy(alpha = 0.18f) else c.card)
+            .border(1.dp, if (t.active) c.accent.copy(alpha = 0.8f) else c.outline, shape)
+            .clickable { onOpen(t.path) }
+            .padding(start = 10.dp, end = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        FileIcon(t.name, 20.dp)
+        Spacer(Modifier.width(8.dp))
+        Txt(t.name, Modifier.widthIn(max = 150.dp), size = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (t.dirty) {
+            Spacer(Modifier.width(6.dp))
+            Box(Modifier.size(6.dp).clip(CircleShape).background(c.accent))
+        }
+        IconBtn(Ic.Close, { onClose(t.path) }, tint = c.dim, size = 32.dp)
     }
 }
 
@@ -368,6 +516,7 @@ private fun EditorMenu(
     onDismiss: () -> Unit,
     hasFile: Boolean,
     canEdit: Boolean,
+    hasProject: Boolean,
     autosave: Boolean,
     onAutosave: (Boolean) -> Unit,
     onSave: () -> Unit,
@@ -375,6 +524,7 @@ private fun EditorMenu(
     onOpenFile: () -> Unit,
     onOpenFolder: () -> Unit,
     onSearch: () -> Unit,
+    onFindInProject: () -> Unit,
     onReplace: () -> Unit,
     onGoto: () -> Unit,
     onRepo: () -> Unit,
@@ -399,6 +549,7 @@ private fun EditorMenu(
         MenuHeader("Editor")
         // these work on the editor, so they are off while a Markdown preview is showing
         MenuRow("Search text in file", canEdit) { onDismiss(); onSearch() }
+        MenuRow("Find in project", hasProject) { onDismiss(); onFindInProject() }
         MenuRow("Replace", canEdit) { onDismiss(); onReplace() }
         MenuRow("Go to line", canEdit) { onDismiss(); onGoto() }
         MenuRow("Repo name") { onDismiss(); onRepo() }
