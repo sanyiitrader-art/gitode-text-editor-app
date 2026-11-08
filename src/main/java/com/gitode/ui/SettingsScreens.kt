@@ -161,6 +161,13 @@ private fun EditorPage(s: Settings, onBack: () -> Unit) {
             trailing = { GitodeSwitch(s.smartActions) { s.smartActions = it } },
         )
         SettingCard(
+            icon = Ic.Layers,
+            title = "Indentation guides",
+            subtitle = "Faint vertical lines at each indentation level",
+            onClick = { s.indentGuides = !s.indentGuides },
+            trailing = { GitodeSwitch(s.indentGuides) { s.indentGuides = it } },
+        )
+        SettingCard(
             icon = Ic.Layout,
             title = "Indentation width",
             subtitle = "Used when a file's own style can't be detected",
