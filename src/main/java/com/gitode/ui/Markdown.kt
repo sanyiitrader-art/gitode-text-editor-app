@@ -74,12 +74,12 @@ import org.commonmark.node.BlockQuote
 import org.commonmark.node.BulletList
 import org.commonmark.node.Code
 import org.commonmark.node.Emphasis
-import org.commonmark.node.FencedCode
+import org.commonmark.node.FencedCodeBlock
 import org.commonmark.node.HardLineBreak
 import org.commonmark.node.Heading
 import org.commonmark.node.HtmlBlock
 import org.commonmark.node.HtmlInline
-import org.commonmark.node.IndentedCode
+import org.commonmark.node.IndentedCodeBlock
 import org.commonmark.node.Link
 import org.commonmark.node.ListItem
 import org.commonmark.node.Node
@@ -429,8 +429,8 @@ private fun MdBlock(node: Node, ctx: MdCtx, depth: Int, dim: Boolean) {
     when (node) {
         is Heading -> MdHeading(node, ctx)
         is Paragraph -> MdInline(node, body, ctx)
-        is FencedCode -> MdCode(node.literal)
-        is IndentedCode -> MdCode(node.literal)
+        is FencedCodeBlock -> MdCode(node.literal)
+        is IndentedCodeBlock -> MdCode(node.literal)
         is BlockQuote -> MdQuote(node, ctx, depth)
         is BulletList -> MdList(node, false, ctx, depth)
         is OrderedList -> MdList(node, true, ctx, depth)
