@@ -74,8 +74,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
@@ -87,6 +87,9 @@ import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.launch
 import java.io.File
+
+/** How far each nesting level moves a card to the right. */
+private const val INDENT_DP = 14
 
 private sealed interface TreeRow {
     class Item(val file: File, val depth: Int) : TreeRow
@@ -138,7 +141,6 @@ fun ExplorerDrawer(
     val scope = rememberCoroutineScope()
     val view = LocalView.current
     val focusManager = LocalFocusManager.current
-    val density = LocalDensity.current
     val screenHeightDp = LocalConfiguration.current.screenHeightDp
     val root = vm.root
     val edit = vm.inlineEdit
@@ -210,20 +212,14 @@ fun ExplorerDrawer(
         }
     }
 
-    // How wide the list needs to be so every row keeps its normal look: the widest row decides.
-    val measurer = rememberTextMeasurer()
-    val widthCache = remember { HashMap<String, Int>() }
-    var maxRowDp = 0f
+    // The deepest card on screen decides how far the list can scroll sideways.
+    var maxDepth = 0
     for (r in rows) {
-        if (r is TreeRow.Item) {
-            val name = r.file.name
-            val textPx = widthCache.getOrPut(name) {
-                measurer.measure(name, style = TextStyle(fontSize = 15.sp), softWrap = false, maxLines = 1).size.width
-            }
-            val textDp = with(density) { textPx.toDp().value }
-            val fixed = 8f + r.depth * 14f + 8f + 20f + (if (r.file.isDirectory) 56f else 50f) + 12f
-            maxRowDp = maxOf(maxRowDp, fixed + textDp * 1.08f + 6f)
+        val d = when (r) {
+            is TreeRow.Item -> r.depth
+            is TreeRow.Create -> r.depth
         }
+        if (d > maxDepth) maxDepth = d
     }
 
     Column(
@@ -283,7 +279,7 @@ fun ExplorerDrawer(
             }
         }
 
-        // ---- explorer listing (scrolls sideways when nested folders make rows wider than the drawer)
+        // ---- explorer listing
         if (root == null) {
             Box(
                 Modifier.weight(1f).fillMaxWidth().noRippleClick(onBlank),
@@ -292,7 +288,11 @@ fun ExplorerDrawer(
         } else {
             BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().nestedScroll(nested)) {
                 val viewportW = maxWidth
-                val contentW = maxOf(viewportW, maxRowDp.dp)
+                // Every card keeps the width it always had (the drawer's width minus its margins).
+                val cardW = viewportW - 16.dp
+                // A nested card moves right by one step and keeps that width, so it pokes out past
+                // its parent's right edge. The list scrolls sideways exactly as far as the deepest card.
+                val contentW = viewportW + (maxDepth * INDENT_DP).dp
                 val hState = rememberScrollState()
 
                 Box(Modifier.fillMaxSize().horizontalScroll(hState, enabled = contentW > viewportW)) {
@@ -310,11 +310,15 @@ fun ExplorerDrawer(
                             },
                         ) { r ->
                             when (r) {
-                                is TreeRow.Create -> InlineRow(r.depth, r.isDir, field, { field = it; error = null }, error, trigger) { submit() }
+                                is TreeRow.Create -> InlineRow(
+                                    r.depth, r.isDir, cardW, field, { field = it; error = null }, error, trigger,
+                                ) { submit() }
                                 is TreeRow.Item -> {
                                     val f = r.file
                                     if (edit is InlineEdit.Rename && edit.file.path == f.path) {
-                                        InlineRow(r.depth, f.isDirectory, field, { field = it; error = null }, error, trigger) { submit() }
+                                        InlineRow(
+                                            r.depth, f.isDirectory, cardW, field, { field = it; error = null }, error, trigger,
+                                        ) { submit() }
                                     } else {
                                         val lit = if (vm.selectionMode) {
                                             if (f.isDirectory) folderFullySelected(vm, f) else vm.selected.contains(f.path)
@@ -324,6 +328,7 @@ fun ExplorerDrawer(
                                         ItemRow(
                                             file = f,
                                             depth = r.depth,
+                                            cardW = cardW,
                                             isExpanded = vm.expanded.contains(f.path),
                                             lit = lit,
                                             menuEnabled = !vm.selectionMode && edit == null,
@@ -547,6 +552,7 @@ private fun ContextMenu(items: List<Pair<String, () -> Unit>>, onDismiss: () -> 
 private fun ItemRow(
     file: File,
     depth: Int,
+    cardW: Dp,
     isExpanded: Boolean,
     lit: Boolean,
     menuEnabled: Boolean,
@@ -562,8 +568,9 @@ private fun ItemRow(
     val clickNow by rememberUpdatedState(onClick)
     val menuOk by rememberUpdatedState(menuEnabled)
 
+    // The card always has the same width; only its left edge moves in with the nesting level.
     Box(
-        Modifier.fillMaxWidth().padding(start = (8 + depth * 14).dp, end = 8.dp, top = 3.dp, bottom = 3.dp),
+        Modifier.padding(start = (8 + depth * INDENT_DP).dp, top = 3.dp, bottom = 3.dp).width(cardW),
     ) {
         Row(
             Modifier.fillMaxWidth().height(46.dp).clip(shape)
@@ -613,6 +620,7 @@ private fun ItemRow(
 private fun InlineRow(
     depth: Int,
     isDir: Boolean,
+    cardW: Dp,
     field: TextFieldValue,
     onField: (TextFieldValue) -> Unit,
     error: String?,
@@ -621,9 +629,10 @@ private fun InlineRow(
 ) {
     val c = G.c
     Row(
-        // the empty click keeps taps in and around the input from counting as blank taps
-        Modifier.fillMaxWidth().noRippleClick { }
-            .padding(start = (14 + depth * 14).dp, end = 10.dp, top = 3.dp, bottom = 3.dp),
+        Modifier.padding(start = (8 + depth * INDENT_DP).dp, top = 3.dp, bottom = 3.dp).width(cardW)
+            // the empty click keeps taps in and around the input from counting as blank taps
+            .noRippleClick { }
+            .padding(horizontal = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Ico(if (isDir) Ic.Folder else Ic.File, c.dim, 22.dp)
