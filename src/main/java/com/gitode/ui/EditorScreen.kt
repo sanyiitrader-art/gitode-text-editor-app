@@ -74,6 +74,7 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextRange
@@ -109,11 +110,13 @@ fun EditorScreen(
     onPickFile: () -> Unit,
     onConnect: () -> Unit,
     onPush: () -> Unit,
+    covered: Boolean = false,
 ) {
     val c = G.c
     val scope = rememberCoroutineScope()
     val view = LocalView.current
     val density = LocalDensity.current
+    val appContext = LocalContext.current
 
     var p by remember { mutableFloatStateOf(0f) }
     var anim by remember { mutableStateOf<Job?>(null) }
@@ -159,11 +162,28 @@ fun EditorScreen(
     BackHandler(enabled = p > 0f) { settle(0f) }
     BackHandler(enabled = tabsOpen && p == 0f) { tabsOpen = false }
 
+    // The selection menu (copy, cut, paste...) is a window of its own that floats above everything,
+    // so it is closed whenever the drawer, another screen, a menu or a dialog covers the editor.
+    val anyCover = covered || p > 0f || tabsOpen || menuOpen || showUnsaved || showReplace ||
+        showGoto || showRepo || closeAsk != null
+    LaunchedEffect(anyCover) { if (anyCover) editor?.hideSelectionMenu() }
+
     val active = vm.active
     val image = vm.imageFile
     val connected = vm.settings.githubConnected
     val isMd = active != null && Fs.isMarkdown(active.file.name)
     val previewing = active != null && isMd && previewPaths.contains(active.file.path)
+
+    // Get the Markdown preview ready as soon as a Markdown file opens (the browser engine and the page),
+    // so turning the switch on is instant instead of building everything at that moment.
+    LaunchedEffect(active?.file?.path, isMd) {
+        if (isMd) {
+            delay(300)
+            MdWebPool.warm(appContext)
+            val text = vm.active?.text
+            if (text != null) withContext(Dispatchers.Default) { MdHtml.prepare(text) }
+        }
+    }
 
     // A search result or "go to line" needs the editor, so a Markdown preview switches back to editing.
     val jump = vm.pendingJump
