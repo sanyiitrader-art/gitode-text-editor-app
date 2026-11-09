@@ -244,6 +244,7 @@ class MainActivity : ComponentActivity() {
         Box(Modifier.fillMaxSize()) {
             EditorScreen(
                 vm = vm,
+                covered = screen != Screen.Editor,
                 onSearch = { vm.flushActive(); screen = Screen.Search },
                 onFindInProject = { vm.flushActive(); screen = Screen.Project },
                 onSettings = { keyboard?.hide(); screen = Screen.Settings },
