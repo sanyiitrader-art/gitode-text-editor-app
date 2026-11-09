@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.gitode.core.Fs
+import com.gitode.core.Langs
 import com.gitode.core.SmartConfig
 import com.gitode.core.SmartEdit
 import com.gitode.core.SmartResult
@@ -217,7 +218,7 @@ val TOOL_KEYS: List<ToolKey> = listOf(
 
 /** Sora editor with Gitode's smart editing hooked into typing, Enter, Backspace and Tab. */
 class GitodeEditor(context: Context) : CodeEditor(context) {
-    /** Smart-editing configuration, or null while Smart actions are off. */
+    /** Smart-editing configuration, or null while both Smart indentation and Smart actions are off. */
     var smartProvider: () -> SmartConfig? = { null }
 
     /** Indentation settings for the Tab key (always available). */
@@ -226,7 +227,7 @@ class GitodeEditor(context: Context) : CodeEditor(context) {
     // ---- indentation guides (drawn on top of the editor, never part of the text)
     var guidesOn = true
     var guideColor: Int = 0x40808080
-    /** Spaces per indentation level for guide spacing; 0 means the file is indented with tabs. */
+    /** Columns per indentation level (the configured indentation width). */
     var guideUnitProvider: () -> Int = { 4 }
     /** The editor's text size in sp, used only if the editor can't report its size in pixels. */
     var guideTextSp = 14f
@@ -281,7 +282,7 @@ class GitodeEditor(context: Context) : CodeEditor(context) {
         }
     }
 
-    /** Width of a line's leading whitespace in columns, or -1 if the line is blank. */
+    /** Width of a line's leading whitespace in columns, or -1 if the line has no text (empty or only whitespace). */
     private fun leadingCols(s: String, tabCols: Int): Int {
         var col = 0
         for (ch in s) {
@@ -320,16 +321,17 @@ class GitodeEditor(context: Context) : CodeEditor(context) {
         if (rowH < 4f) return
         val spaceW = spacePaint.measureText(" ")
         if (spaceW <= 0f) return
-        val tabCols = (num("getTabWidth") ?: 4f).toInt().coerceAtLeast(1)
-        val unitCfg = guideUnitProvider()
-        val unit = if (unitCfg > 0) unitCfg else tabCols
+        val unit = guideUnitProvider().coerceAtLeast(1)
+        val tabCols = (num("getTabWidth") ?: unit.toFloat()).toInt().coerceAtLeast(1)
         val lines = text.lineCount
         if (lines <= 0 || height <= 0) return
 
         val first = (offY / rowH).toInt().coerceIn(0, lines - 1)
         val last = ((offY + height) / rowH).toInt().coerceIn(0, lines - 1)
+        val stroke = maxOf(1f, dm.density)
         guidePaint.color = guideColor
-        guidePaint.strokeWidth = maxOf(1f, dm.density)
+        guidePaint.strokeWidth = stroke
+        val inset = stroke / 2f // keeps the first guide fully inside the text area
 
         canvas.save()
         // guides live in the text area only, so they never touch the line numbers
@@ -338,40 +340,43 @@ class GitodeEditor(context: Context) : CodeEditor(context) {
             val top = ln * rowH - offY
             val bottom = top + rowH
             val s = text.getLineString(ln)
-            val indent = leadingCols(s, tabCols)
-            if (indent >= 0) {
-                // a line with text: one guide at the start of each indentation level, read from its real characters
-                var col = 0
-                var run = 0
-                var i = 0
-                while (i < s.length) {
-                    val ch = s[i]
-                    if (ch == '\t') {
-                        val x = region + col * spaceW - offX
+
+            // Guides for the line's own leading whitespace, read from its real characters.
+            // This also covers a line you have just indented but not typed on yet.
+            var col = 0
+            var run = 0
+            var onlyWhitespace = true
+            var i = 0
+            while (i < s.length) {
+                val ch = s[i]
+                if (ch == '\t') {
+                    val x = region + col * spaceW - offX + inset
+                    canvas.drawLine(x, top, x, bottom, guidePaint)
+                    col += tabCols
+                    run = 0
+                } else if (ch == ' ') {
+                    if (run % unit == 0) {
+                        val x = region + col * spaceW - offX + inset
                         canvas.drawLine(x, top, x, bottom, guidePaint)
-                        col += tabCols
-                        run = 0
-                    } else if (ch == ' ') {
-                        if (run % unit == 0) {
-                            val x = region + col * spaceW - offX
-                            canvas.drawLine(x, top, x, bottom, guidePaint)
-                        }
-                        run++
-                        col++
-                    } else {
-                        break
                     }
-                    i++
+                    run++
+                    col++
+                } else if (ch != '\r') {
+                    onlyWhitespace = false
+                    break
                 }
-            } else {
-                // a blank line keeps the guides of the code around it, so they don't break into dashes
+                i++
+            }
+
+            // A line with no text keeps the guides of the code around it, so they don't break into dashes.
+            if (onlyWhitespace) {
                 val eff = minOf(
                     neighborIndent(ln, -1, lines, tabCols),
                     neighborIndent(ln, 1, lines, tabCols),
                 )
-                var c = 0
+                var c = ((col + unit - 1) / unit) * unit
                 while (c < eff) {
-                    val x = region + c * spaceW - offX
+                    val x = region + c * spaceW - offX + inset
                     canvas.drawLine(x, top, x, bottom, guidePaint)
                     c += unit
                 }
@@ -469,10 +474,28 @@ class GitodeEditor(context: Context) : CodeEditor(context) {
 
     // ---- smart reactions (return true when the input was handled)
 
+    /**
+     * Typing } ] or ) on a line that holds only indentation moves that line to the indentation of the
+     * line with the matching opening delimiter. Brackets in strings and comments are ignored.
+     */
+    private fun alignCloser(ch: Char, cfg: SmartConfig): Boolean {
+        if (ch != ')' && ch != ']' && ch != '}') return false
+        if (!cfg.indent || cursor.isSelected) return false
+        if (!Langs.of(cfg.lang).bracketIndent) return false
+        val c = ctx()
+        if (c.before.isEmpty() || !c.before.all { it == ' ' || it == '\t' }) return false
+        if (c.after.firstOrNull() == ch) return false // typing in front of the same closer steps over it instead
+        val target = SmartEdit.openerIndent({ text.getLineString(it) }, c.line, ch, cfg) ?: return false
+        if (target == c.before) return false // already aligned: type the character normally
+        apply(SmartResult.Edit(target + ch, deleteBefore = c.before.length), c)
+        return true
+    }
+
     private fun handleTyped(ch: Char, hasSelection: Boolean): Boolean {
         val cfg = smartProvider() ?: return false
+        if (alignCloser(ch, cfg)) return true
         val c = ctx()
-        val r = SmartEdit.typed(ch, c.before, c.after, hasSelection, cfg.lang)
+        val r = SmartEdit.typed(ch, c.before, c.after, hasSelection, cfg)
         return when {
             r is SmartResult.Wrap -> { wrapSelection(r.open, r.close); true }
             r === SmartResult.Skip -> { setSelection(c.line, c.col + 1); true }
@@ -512,6 +535,7 @@ class GitodeEditor(context: Context) : CodeEditor(context) {
                         if (handleTyped(text[0], cursor.isSelected)) return true
                     }
                 }
+                // anything longer (a paste, a suggestion) goes in exactly as it is: pasted code keeps its indentation
                 return super.commitText(text, newCursorPosition)
             }
 
@@ -573,6 +597,7 @@ private class EditorHolder {
     var languageSyntaxOn: Boolean? = null
     var guides: Boolean? = null
     var guideColor = 0
+    var tabWidth = -1
 }
 
 private fun applyChrome(scheme: EditorColorScheme, c: GitodeColors, overrideText: Boolean) {
@@ -616,16 +641,12 @@ private fun createEditor(context: Context, vm: MainViewModel, holder: EditorHold
         InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
             InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
     )
-    ed.smartProvider = { if (vm.settings.smartActions) vm.smartConfig(holder.loaded) else null }
-    ed.indentProvider = { vm.smartConfig(holder.loaded) }
-    ed.guideUnitProvider = {
-        val ind = holder.loaded?.indent
-        when {
-            ind != null && !ind.useSpaces -> 0
-            ind != null -> ind.width.coerceAtLeast(1)
-            else -> vm.settings.tabWidth.coerceAtLeast(1)
-        }
+    ed.smartProvider = {
+        val cfg = vm.smartConfig(holder.loaded)
+        if (cfg.indent || cfg.pairs) cfg else null
     }
+    ed.indentProvider = { vm.smartConfig(holder.loaded) }
+    ed.guideUnitProvider = { vm.settings.tabWidth.coerceAtLeast(1) }
 
     ed.subscribeEvent(
         ContentChangeEvent::class.java,
@@ -691,6 +712,7 @@ private fun sync(
     syntaxOn: Boolean,
     syntaxTheme: String,
     guides: Boolean,
+    tabWidth: Int,
 ) {
     if (holder.fontSize != fontSize) {
         ed.setTextSize(fontSize.toFloat())
@@ -702,6 +724,13 @@ private fun sync(
         ed.typefaceText = tf
         ed.typefaceLineNumber = tf
         holder.fontFamily = fontFamily
+    }
+
+    // The indentation width also sets how wide a tab character is drawn, so tabs and guides agree.
+    if (holder.tabWidth != tabWidth) {
+        ed.tryCall("setTabWidth", tabWidth)
+        holder.tabWidth = tabWidth
+        ed.invalidate()
     }
 
     if (holder.colors !== colors || holder.syntaxOn != syntaxOn || holder.syntaxTheme != syntaxTheme) {
@@ -777,6 +806,7 @@ fun CodeEditorView(
     val syntaxOn = s.syntaxHighlighting
     val syntaxTheme = s.syntaxTheme
     val guides = s.indentGuides
+    val tabWidth = s.tabWidth
     val holder = remember { EditorHolder() }
 
     DisposableEffect(Unit) {
@@ -794,7 +824,7 @@ fun CodeEditorView(
         modifier = modifier,
         factory = { ctx -> createEditor(ctx, vm, holder) },
         update = { ed ->
-            sync(context, vm, holder, ed, buffer, colors, fontSize, fontFamily, syntaxOn, syntaxTheme, guides)
+            sync(context, vm, holder, ed, buffer, colors, fontSize, fontFamily, syntaxOn, syntaxTheme, guides, tabWidth)
         },
     )
     SideEffect { onEditor(holder.editor) }
@@ -845,9 +875,8 @@ fun SmartKeysBar(editor: GitodeEditor?, modifier: Modifier = Modifier) {
     Box(modifier.fillMaxWidth().background(c.surface).noRippleClick { }) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.outline))
         Row(
-            // extra space on the left keeps the first key clear of the drawer's edge-swipe strip
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-                .padding(start = 30.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
+                .padding(start = 6.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconKey(Ic.Undo) { editor?.undoAction() }
