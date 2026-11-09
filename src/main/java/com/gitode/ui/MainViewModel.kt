@@ -467,9 +467,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ================================================================ smart editing config
 
     fun smartConfig(b: Buffer?): SmartConfig {
-        val ind = b?.indent
         val lang = b?.let { Fs.languageOf(it.file.name) }
-        return SmartConfig(ind?.width ?: settings.tabWidth, ind?.useSpaces ?: settings.useSpaces, lang)
+        return SmartConfig(
+            settings.tabWidth, settings.useSpaces, lang,
+            indent = settings.smartIndent, pairs = settings.smartActions,
+        )
     }
 
     // ================================================================ repository name
