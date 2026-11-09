@@ -669,6 +669,39 @@ def fetch_logos():
     print(f"logos: {got}/{len(LOGOS)}")
 
 
+# ------------------------------------------------------------ katex (math)
+
+KATEX_BASE = "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/"
+KATEX_FONTS = [
+    "KaTeX_AMS-Regular", "KaTeX_Caligraphic-Bold", "KaTeX_Caligraphic-Regular",
+    "KaTeX_Fraktur-Bold", "KaTeX_Fraktur-Regular", "KaTeX_Main-Bold", "KaTeX_Main-BoldItalic",
+    "KaTeX_Main-Italic", "KaTeX_Main-Regular", "KaTeX_Math-BoldItalic", "KaTeX_Math-Italic",
+    "KaTeX_SansSerif-Bold", "KaTeX_SansSerif-Italic", "KaTeX_SansSerif-Regular",
+    "KaTeX_Script-Regular", "KaTeX_Size1-Regular", "KaTeX_Size2-Regular", "KaTeX_Size3-Regular",
+    "KaTeX_Size4-Regular", "KaTeX_Typewriter-Regular",
+]
+
+
+def fetch_katex():
+    out = ASSETS / "katex"
+    shutil.rmtree(out, ignore_errors=True)
+    (out / "fonts").mkdir(parents=True, exist_ok=True)
+    got = 0
+    for name in ("katex.min.js", "katex.min.css"):
+        try:
+            (out / name).write_bytes(http_get(KATEX_BASE + name))
+            got += 1
+        except Exception as e:  # noqa: BLE001
+            warn(f"katex {name}: {e} (math formulas will show as plain text)")
+    for font in KATEX_FONTS:
+        try:
+            (out / "fonts" / f"{font}.woff2").write_bytes(http_get(f"{KATEX_BASE}fonts/{font}.woff2"))
+            got += 1
+        except Exception as e:  # noqa: BLE001
+            warn(f"katex font {font}: {e}")
+    print(f"katex: {got}/{2 + len(KATEX_FONTS)}")
+
+
 # ------------------------------------------------------ theme previews
 
 def copy_previews():
@@ -688,7 +721,7 @@ def copy_previews():
 
 def main():
     ASSETS.mkdir(parents=True, exist_ok=True)
-    for stage in (make_icons, fetch_textmate, fetch_fonts, fetch_logos, copy_previews):
+    for stage in (make_icons, fetch_textmate, fetch_fonts, fetch_logos, fetch_katex, copy_previews):
         try:
             stage()
         except Exception as e:  # noqa: BLE001
