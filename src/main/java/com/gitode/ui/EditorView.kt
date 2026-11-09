@@ -259,6 +259,21 @@ class GitodeEditor(context: Context) : CodeEditor(context) {
         }
     }
 
+    /**
+     * Hides the copy / cut / paste menu that appears over a text selection. That menu is a separate window
+     * that sits above everything, so it has to be closed when the drawer, a screen or a dialog covers the
+     * editor. The selection itself is kept.
+     */
+    fun hideSelectionMenu() {
+        try {
+            val cls = Class.forName("io.github.rosemoe.sora.widget.component.EditorTextActionWindow")
+            val comp = javaClass.getMethod("getComponent", Class::class.java).invoke(this, cls)
+            if (comp != null) comp.javaClass.getMethod("dismiss").invoke(comp)
+        } catch (e: Throwable) {
+            // This editor version has no such menu component.
+        }
+    }
+
     // ---- indentation guides
 
     /** Reads a number from one of the editor's getters by name (null if this version doesn't have it). */
@@ -308,16 +323,21 @@ class GitodeEditor(context: Context) : CodeEditor(context) {
         return 0
     }
 
+    /** Height of one text row in pixels, from the editor itself when it reports it. */
+    private fun rowHeightPx(): Float {
+        num("getRowHeight")?.let { if (it >= 4f) return it }
+        num("getLineHeight")?.let { if (it >= 4f) return it }
+        val fmi = spacePaint.fontMetricsInt
+        return (fmi.descent - fmi.ascent).toFloat()
+    }
+
     private fun drawGuides(canvas: Canvas) {
-        val offX = num("getOffsetX") ?: return
-        val offY = num("getOffsetY") ?: return
         val region = num("measureTextRegionOffset") ?: return // where the text starts (right of the line numbers)
         val dm = resources.displayMetrics
         val sizePx = num("getTextSizePx") ?: TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, guideTextSp, dm)
         spacePaint.typeface = typefaceText
         spacePaint.textSize = sizePx
-        val fm = spacePaint.fontMetrics
-        val rowH = num("getRowHeight") ?: (fm.descent - fm.ascent)
+        val rowH = rowHeightPx()
         if (rowH < 4f) return
         val spaceW = spacePaint.measureText(" ")
         if (spaceW <= 0f) return
@@ -326,16 +346,25 @@ class GitodeEditor(context: Context) : CodeEditor(context) {
         val lines = text.lineCount
         if (lines <= 0 || height <= 0) return
 
-        val first = (offY / rowH).toInt().coerceIn(0, lines - 1)
-        val last = ((offY + height) / rowH).toInt().coerceIn(0, lines - 1)
+        // How far the text is scrolled. If the editor scrolls by moving its whole drawing surface
+        // (scrollX / scrollY), that move is already applied to this canvas, so it is undone below and the
+        // guides are drawn in the editor's own coordinates; otherwise the editor's own offsets are used.
+        val sx = scrollX
+        val sy = scrollY
+        val offX = if (sx != 0) sx.toFloat() else (num("getOffsetX") ?: 0f)
+        val offY = if (sy != 0) sy.toFloat() else (num("getOffsetY") ?: 0f)
+
+        val first = ((offY / rowH).toInt() - 1).coerceIn(0, lines - 1)
+        val last = (((offY + height) / rowH).toInt() + 1).coerceIn(0, lines - 1)
         val stroke = maxOf(1f, dm.density)
         guidePaint.color = guideColor
         guidePaint.strokeWidth = stroke
         val inset = stroke / 2f // keeps the first guide fully inside the text area
 
         canvas.save()
-        // guides live in the text area only, so they never touch the line numbers
-        canvas.clipRect(region, 0f, width.toFloat(), height.toFloat())
+        canvas.translate(sx.toFloat(), sy.toFloat()) // undo any scroll already applied to this canvas
+        // guides live in the editor's text area only: not over the line numbers, not outside the editor
+        canvas.clipRect(maxOf(region, 0f), 0f, width.toFloat(), height.toFloat())
         for (ln in first..last) {
             val top = ln * rowH - offY
             val bottom = top + rowH
@@ -814,6 +843,7 @@ fun CodeEditorView(
             vm.bridge.getText = null
             vm.bridge.replaceAll = null
             onEditor(null)
+            try { holder.editor?.hideSelectionMenu() } catch (e: Throwable) { /* ignore */ }
             try { holder.editor?.release() } catch (e: Throwable) { /* already released */ }
             holder.editor = null
             holder.loaded = null
