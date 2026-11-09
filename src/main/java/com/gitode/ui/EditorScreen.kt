@@ -348,7 +348,7 @@ fun EditorScreen(
             // the drawer appears. It also asks Android not to treat swipes here as the system Back gesture.
             Box(
                 Modifier.align(Alignment.TopStart).statusBarsPadding().padding(top = 100.dp)
-                    .height(320.dp).width(28.dp)
+                    .height(280.dp).width(28.dp)
                     .onGloballyPositioned { co ->
                         if (Build.VERSION.SDK_INT >= 29) {
                             val pos = co.positionInWindow()
