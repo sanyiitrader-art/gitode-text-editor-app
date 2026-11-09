@@ -154,9 +154,16 @@ private fun EditorPage(s: Settings, onBack: () -> Unit) {
             trailing = { GitodeSwitch(s.syntaxHighlighting) { s.syntaxHighlighting = it } },
         )
         SettingCard(
+            icon = Ic.Menu,
+            title = "Smart indentation",
+            subtitle = "Enter keeps and adds indentation, closing brackets line up, Backspace removes a level",
+            onClick = { s.smartIndent = !s.smartIndent },
+            trailing = { GitodeSwitch(s.smartIndent) { s.smartIndent = it } },
+        )
+        SettingCard(
             icon = Ic.Star,
             title = "Smart actions",
-            subtitle = "Auto-indent, bracket and quote pairing, smart Backspace",
+            subtitle = "Bracket and quote pairing, deleting a pair together",
             onClick = { s.smartActions = !s.smartActions },
             trailing = { GitodeSwitch(s.smartActions) { s.smartActions = it } },
         )
@@ -170,7 +177,7 @@ private fun EditorPage(s: Settings, onBack: () -> Unit) {
         SettingCard(
             icon = Ic.Layout,
             title = "Indentation width",
-            subtitle = "Used when a file's own style can't be detected",
+            subtitle = "Columns per level (also how wide a tab is drawn)",
             onClick = {},
             trailing = {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -179,11 +186,16 @@ private fun EditorPage(s: Settings, onBack: () -> Unit) {
             },
         )
         SettingCard(
-            icon = Ic.Menu,
-            title = "Indent with spaces",
-            subtitle = "Turn off to indent with tab characters",
-            onClick = { s.useSpaces = !s.useSpaces },
-            trailing = { GitodeSwitch(s.useSpaces) { s.useSpaces = it } },
+            icon = Ic.Code,
+            title = "Indentation type",
+            subtitle = "What Tab and new indentation insert",
+            onClick = {},
+            trailing = {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Chip("Spaces", s.useSpaces) { s.useSpaces = true }
+                    Chip("Tabs", !s.useSpaces) { s.useSpaces = false }
+                }
+            },
         )
         Spacer(Modifier.height(16.dp))
     }
