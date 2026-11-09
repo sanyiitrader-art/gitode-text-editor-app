@@ -6,7 +6,17 @@ import kotlin.math.abs
 
 // ====================================================================== smart editing
 
-class SmartConfig(val tabWidth: Int, val useSpaces: Boolean, val lang: String?) {
+/**
+ * What the editor should do for the current file. [indent] switches the indentation features
+ * (Enter, closing-delimiter alignment, Backspace by a level); [pairs] switches bracket and quote pairing.
+ */
+class SmartConfig(
+    val tabWidth: Int,
+    val useSpaces: Boolean,
+    val lang: String?,
+    val indent: Boolean = true,
+    val pairs: Boolean = true,
+) {
     /** One level of indentation. Makefile recipes need a real tab, and Go code is tab-indented (gofmt). */
     val unit: String
         get() = when {
@@ -38,7 +48,7 @@ sealed class SmartResult {
 
 /** How one language wants its code edited. */
 class LangRules(
-    /** Line-comment markers; pairing is switched off after one. */
+    /** Line-comment markers; pairing and indentation ignore what follows one. */
     val lineComments: List<String>,
     /** C-style block comments, for example in the middle of a Javadoc. */
     val blockComments: Boolean = false,
@@ -64,13 +74,19 @@ class LangRules(
     val markdownLists: Boolean = false,
     /** False where ' is not a string quote (Haskell identifiers, Lisp quote), so it is never auto-paired. */
     val singleQuotePairs: Boolean = true,
+    /** Markup: Enter after an opening tag indents, and typing "</" at the start of a line goes back one level. */
+    val markup: Boolean = false,
+    /** Indent after { [ ( and align a typed closing delimiter with its opener. Off for prose-like formats. */
+    val bracketIndent: Boolean = true,
 )
 
 object Langs {
     private val C_LIKE = LangRules(listOf("//"), blockComments = true)
     private val C_LIKE_ANGLE = LangRules(listOf("//"), blockComments = true, angle = true)
-    private val MARKUP = LangRules(emptyList(), xmlComments = true, angle = true)
-    private val DEFAULT = LangRules(listOf("//", "#"), blockComments = true)
+    private val MARKUP = LangRules(emptyList(), xmlComments = true, angle = true, markup = true)
+
+    /** Unknown extensions: pairing like code, but indentation only ever preserves what is there. */
+    private val UNKNOWN = LangRules(listOf("//", "#"), blockComments = true, bracketIndent = false)
 
     private val RUBY_OPENER = Regex(
         """^(?!.*\bend\s*$)(?:(?:def|class|module|if|unless|while|until|for|case|begin|else|elsif|ensure|rescue|when)\b.*|.*\bdo(?:\s*\|[^|]*\|)?)$""",
@@ -100,7 +116,9 @@ object Langs {
     private val ERLANG_OPENER = Regex("""^.*(?:->|\bof|\bbegin|\bafter|\breceive|\btry)$""")
     private val NIX_OPENER = Regex("""^.*\blet$""")
 
-    private val VUE_LIKE = LangRules(listOf("//"), blockComments = true, xmlComments = true, angle = true)
+    private val VUE_LIKE = LangRules(
+        listOf("//"), blockComments = true, xmlComments = true, angle = true, markup = true,
+    )
 
     private val table: Map<String, LangRules> = mapOf(
         // original languages
@@ -112,16 +130,16 @@ object Langs {
         "kotlin" to C_LIKE_ANGLE,
         "java" to C_LIKE_ANGLE,
         "typescript" to C_LIKE_ANGLE,
-        "tsx" to C_LIKE_ANGLE,
-        "javascript" to C_LIKE,
+        "tsx" to LangRules(listOf("//"), blockComments = true, angle = true, markup = true),
+        "javascript" to LangRules(listOf("//"), blockComments = true, markup = true),
         "cpp" to C_LIKE_ANGLE,
         "c" to C_LIKE,
         "swift" to C_LIKE_ANGLE,
         "rust" to LangRules(listOf("//"), blockComments = true, angle = true, rustQuotes = true),
-        "php" to LangRules(listOf("//", "#"), blockComments = true),
+        "php" to LangRules(listOf("//", "#"), blockComments = true, markup = true),
         "xml" to MARKUP,
         "qmake" to LangRules(listOf("#"), continuation = true),
-        "gitignore" to LangRules(listOf("#"), pairs = false),
+        "gitignore" to LangRules(listOf("#"), pairs = false, bracketIndent = false),
         "csharp" to C_LIKE_ANGLE,
         "go" to C_LIKE,
         "dart" to C_LIKE_ANGLE,
@@ -141,8 +159,9 @@ object Langs {
         "scala" to C_LIKE,
         "groovy" to C_LIKE,
         // newest additions
-        "markdown" to LangRules(emptyList(), xmlComments = true, markdownLists = true),
-        "text" to LangRules(emptyList(), pairs = false), // plain text: nothing is paired
+        "markdown" to LangRules(emptyList(), xmlComments = true, markdownLists = true, bracketIndent = false),
+        // plain text: nothing is paired and nothing is added, indentation is only preserved
+        "text" to LangRules(emptyList(), pairs = false, bracketIndent = false),
         "graphql" to LangRules(listOf("#")),
         "haskell" to LangRules(listOf("--"), opener = HASKELL_OPENER, singleQuotePairs = false),
         "elixir" to LangRules(listOf("#"), opener = ELIXIR_OPENER),
@@ -157,7 +176,70 @@ object Langs {
         "clojure" to LangRules(listOf(";"), singleQuotePairs = false),
     )
 
-    fun of(lang: String?): LangRules = lang?.let { table[it] } ?: DEFAULT
+    fun of(lang: String?): LangRules = lang?.let { table[it] } ?: UNKNOWN
+}
+
+// ---------------------------------------------------------------- reading one line of code
+
+private fun startsLineComment(line: String, i: Int, rules: LangRules): Boolean {
+    for (m in rules.lineComments) {
+        if (!line.startsWith(m, i)) continue
+        if (m == "#" && i + 1 < line.length && line[i + 1] == '{') continue // interpolation, not a comment
+        if (m == "#" && i > 0 && line[i - 1] == '$') continue // shell $#
+        if (m == "//" && i > 0 && line[i - 1] == ':') continue // a URL outside quotes
+        return true
+    }
+    return false
+}
+
+private fun isStringApostrophe(line: String, i: Int, rules: LangRules): Boolean {
+    val prev = if (i > 0) line[i - 1] else ' '
+    if (prev.isLetterOrDigit() || prev == '_') return false
+    if (rules.transposeQuote && (prev == ')' || prev == ']' || prev == '}' || prev == '.' || prev == '\'')) return false
+    if (rules.rustQuotes && (prev == '<' || prev == '&' || prev == ',')) return false
+    return line.indexOf('\'', i + 1) > i
+}
+
+/**
+ * The line with string contents blanked out and any trailing comment removed, so brackets and colons
+ * inside strings or comments never count. The result has the same column positions as the line.
+ */
+private fun codeOf(line: String, rules: LangRules): String {
+    val t = line.trimStart()
+    if (rules.blockComments && (t.startsWith("/*") || t.startsWith("*/") || t.startsWith("* ") || t == "*")) return ""
+    val n = line.length
+    val sb = StringBuilder(n)
+    var quote = '\u0000'
+    var i = 0
+    while (i < n) {
+        val ch = line[i]
+        if (quote != '\u0000') {
+            if (ch == '\\' && i + 1 < n) {
+                sb.append("  ")
+                i += 2
+                continue
+            }
+            if (ch == quote) quote = '\u0000'
+            sb.append(' ')
+            i++
+            continue
+        }
+        if (startsLineComment(line, i, rules)) break
+        val opensString = when (ch) {
+            '"', '`' -> true
+            '\'' -> rules.singleQuotePairs && isStringApostrophe(line, i, rules)
+            else -> false
+        }
+        if (opensString) {
+            quote = ch
+            sb.append(' ')
+            i++
+            continue
+        }
+        sb.append(ch)
+        i++
+    }
+    return sb.toString()
 }
 
 /** Pure text logic for smart actions. [before]/[after] are the parts of the current line around the cursor. */
@@ -171,6 +253,11 @@ object SmartEdit {
 
     /** A Markdown list line: indent, marker ("-", "*", "+", "1." or "1)"), optional task box, text. */
     private val MD_LIST = Regex("""^(\s*)([-*+]|\d{1,9}[.)])[ \t]+(\[[ xX]\][ \t]+)?(.*)$""")
+
+    private val VOID_TAGS = setOf(
+        "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr",
+    )
+    private val OPEN_TAG = Regex("""^<([A-Za-z][\w:.-]*)(?:\s[^<>]*)?>$""")
 
     private fun inComment(before: String, r: LangRules): Boolean {
         for (marker in r.lineComments) {
@@ -192,9 +279,30 @@ object SmartEdit {
 
     private fun canPairBefore(next: Char?) = next == null || next.isWhitespace() || PAIR_BEFORE.indexOf(next) >= 0
 
-    fun typed(ch: Char, before: String, after: String, hasSelection: Boolean, lang: String? = null): SmartResult {
-        val rules = Langs.of(lang)
-        if (!rules.pairs) return SmartResult.None
+    /** True when the line ends with an opening (non-void, non-self-closing) tag, so the next line goes one level in. */
+    private fun markupOpen(before: String): Boolean {
+        val t = before.trim()
+        if (!t.startsWith("<")) return false
+        val tag = t.substring(t.lastIndexOf('<'))
+        if (tag == "<>") return true // JSX fragment
+        if (tag.endsWith("/>")) return false
+        val m = OPEN_TAG.matchEntire(tag) ?: return false
+        return m.groupValues[1].lowercase() !in VOID_TAGS
+    }
+
+    fun typed(ch: Char, before: String, after: String, hasSelection: Boolean, cfg: SmartConfig): SmartResult {
+        val rules = Langs.of(cfg.lang)
+
+        // Markup: typing "</" at the start of a line steps back one level (the tag is never closed for you).
+        if (cfg.indent && rules.markup && ch == '/' && !hasSelection && before.endsWith("<")) {
+            val ws = before.dropLast(1)
+            val u = cfg.unit
+            if (ws.isNotEmpty() && ws.all { it == ' ' || it == '\t' } && ws.endsWith(u)) {
+                return SmartResult.Edit("</", deleteBefore = u.length + 1)
+            }
+        }
+
+        if (!cfg.pairs || !rules.pairs) return SmartResult.None
         if ((ch == '<' || ch == '>') && !rules.angle) return SmartResult.None
 
         val close = PAIRS[ch]
@@ -244,7 +352,43 @@ object SmartEdit {
         }
     }
 
+    /**
+     * The indentation of the line holding the opening delimiter that matches a closing [closer] typed on
+     * [fromLine], or null if none is found nearby. Brackets inside strings and comments are ignored.
+     */
+    fun openerIndent(lineAt: (Int) -> String, fromLine: Int, closer: Char, cfg: SmartConfig, maxLines: Int = 4000): String? {
+        val opener = when (closer) {
+            ')' -> '('
+            ']' -> '['
+            '}' -> '{'
+            else -> return null
+        }
+        val rules = Langs.of(cfg.lang)
+        var depth = 1
+        var ln = fromLine - 1
+        var scanned = 0
+        while (ln >= 0 && scanned < maxLines) {
+            val raw = lineAt(ln)
+            val code = codeOf(raw, rules)
+            var i = code.length - 1
+            while (i >= 0) {
+                val c = code[i]
+                if (c == closer) {
+                    depth++
+                } else if (c == opener) {
+                    depth--
+                    if (depth == 0) return raw.takeWhile { it == ' ' || it == '\t' }
+                }
+                i--
+            }
+            ln--
+            scanned++
+        }
+        return null
+    }
+
     fun enter(before: String, after: String, cfg: SmartConfig): SmartResult {
+        if (!cfg.indent) return SmartResult.None
         val rules = Langs.of(cfg.lang)
 
         // Markdown: continue the list item you are in (an empty item ends the list).
@@ -268,28 +412,33 @@ object SmartEdit {
         }
 
         val indent = before.takeWhile { it == ' ' || it == '\t' }
-        val trimmed = before.trimEnd()
-        val last = trimmed.lastOrNull()
+        // brackets, colons and keywords only count in real code, not inside strings or comments
+        val code = codeOf(before, rules).trimEnd()
+        val last = code.lastOrNull()
+        val rawTrim = before.trimEnd()
+        val rawLast = rawTrim.lastOrNull()
         val nextCh = after.firstOrNull()
 
-        val tagBetween = last == '>' && after.startsWith("</")
-        val opens = last != null && (
-            last in "{[(" ||
-                (last == ':' && rules.colonOpens) ||
-                tagBetween
-            ) || (rules.opener?.matches(before.trim()) == true)
-        val closes = last != null && nextCh != null && (
-            (last == '{' && nextCh == '}') ||
-                (last == '[' && nextCh == ']') ||
-                (last == '(' && nextCh == ')') ||
-                tagBetween
+        val tagBetween = rules.markup && rawLast == '>' && after.startsWith("</")
+        val bracketOpens = rules.bracketIndent && last != null && last in "{[("
+        val opens = bracketOpens ||
+            (last == ':' && rules.colonOpens) ||
+            tagBetween ||
+            (rules.markup && markupOpen(before)) ||
+            (rules.opener?.matches(code.trim()) == true)
+        val bracketCloses = rules.bracketIndent && rawLast != null && nextCh != null && (
+            (rawLast == '{' && nextCh == '}') ||
+                (rawLast == '[' && nextCh == ']') ||
+                (rawLast == '(' && nextCh == ')')
             )
+        val closes = bracketCloses || tagBetween
+
         if (opens && closes) {
             return SmartResult.Edit("\n" + indent + cfg.unit + "\n" + indent, cursorBack = indent.length + 1)
         }
         if (opens) return SmartResult.Edit("\n" + indent + cfg.unit)
 
-        if (rules.continuation && trimmed.endsWith("\\")) {
+        if (rules.continuation && rawTrim.endsWith("\\")) {
             // The first continued line is indented; later ones keep that indentation.
             return SmartResult.Edit("\n" + indent + if (indent.isEmpty()) cfg.unit else "")
         }
@@ -302,12 +451,14 @@ object SmartEdit {
 
     fun backspace(before: String, after: String, cfg: SmartConfig): SmartResult {
         if (before.isEmpty()) return SmartResult.None
-        if (before.all { it == ' ' }) {
+        // Inside the leading spaces of a line, Backspace removes one whole indentation level.
+        if (cfg.indent && before.all { it == ' ' }) {
             val n = before.length
             val width = cfg.tabWidth.coerceAtLeast(1)
             val remove = if (n % width == 0) width else n % width
             return if (remove > 1) SmartResult.Edit("", deleteBefore = remove) else SmartResult.None
         }
+        if (!cfg.pairs) return SmartResult.None
         val rules = Langs.of(cfg.lang)
         if (!rules.pairs) return SmartResult.None
         val prev = before.last()
