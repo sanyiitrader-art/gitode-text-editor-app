@@ -68,6 +68,7 @@ class Settings(context: Context) {
     var fontFamily by str("font_family", "jetbrains-mono")
     var syntaxHighlighting by bool("syntax_highlighting", true)
     var smartActions by bool("smart_actions", true)
+    var smartIndent by bool("smart_indent", true)
     var tabWidth by int("tab_width", 4)
     var useSpaces by bool("use_spaces", true)
     var autosave by bool("autosave", false)
